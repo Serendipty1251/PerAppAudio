@@ -303,9 +303,29 @@ per-app-audio/
 ## 12. P0 启动清单（按序执行）
 
 1. **建仓**：本地 git 初始化，MIT LICENSE，README 骨架（已完成，见仓库根目录）；
-2. **脚手架**：.NET 8 solution，项目 `RoutingEngine`（`IRoutingBackend` + 手段A/B）/ `SessionManager` / `RuleEngine` / `App.Wpf` / `App.Cli`（已完成，`dotnet build` 通过）；
-3. **PoC-1（手段A）**：枚举设备 → 选目标进程 → 进程级 loopback 捕获 → 渲染到第二设备；测延迟 / CPU / 爆音；
-4. **PoC-2（手段B2）**：IPolicyConfig 接口调用试验，记录 Win10 2004/22H2、Win11 23H2/24H2 版本矩阵结果；
+2. **脚手架**：.NET 8 solution，项目 `WasapiInterop` / `RoutingEngine`（`IRoutingBackend` + 手段A）/ `SessionManager` / `RuleEngine` / `App.Wpf` / `App.Cli`（已完成，`dotnet build` 0 警告 0 错误）；
+3. **PoC-1（手段A）**：**已完成**（2026-10-15，Win11 build 26200 实测）——进程级 loopback 捕获 → 渲染到第二设备全链路打通；实测见下表；
+4. **PoC-2（手段B2）**：IPolicyConfig 接口调用试验，记录 Win10 2004/22H2、Win11 23H2/24H2 版本矩阵结果（下一步）；
 5. **产出《控制手段可行性报告》**，回填 §2.1 控制能力矩阵，定 P1 范围。
+
+**PoC-1 实测记录**（测试音 440Hz 从默认设备 XIBERIA K03S 播放，改道至 VoiceMeeter VAIO3）：
+
+| 指标 | 实测值 | 目标 | 结论 |
+| --- | --- | --- | --- |
+| CPU 占用 | 0.08%（16 逻辑核折算） | <3% | 达标 |
+| 丢帧 / 不连续（爆音） | 0 / 0 | 0 | 达标 |
+| 实时率 | 100.2% | ~100% | 达标 |
+| 单包处理耗时 | avg 0.018ms / max 1.876ms | — | 可忽略 |
+| 拆除后恢复 | 原会话正常恢复 | — | 达标 |
+| 缓冲配置 | 采集 10ms(480帧) + 渲染 10ms(1056帧) | — | 端到端约 20ms+ |
+
+**PoC-1 排障记录（重要经验，避免复发）**：
+
+| 现象 | 根因 |
+| --- | --- |
+| 0xC0000005 AccessViolation @ IMMDevice.GetId | COM 接口 vtable 方法顺序写错：真实顺序是 Activate → **OpenPropertyStore** → GetId → GetState（我最初把 GetId/GetState 写在 OpenPropertyStore 前） |
+| 0x88890011 AUDCLNT_E_EXCLUSIVE_MODE_ONLY @ Loopback Initialize | ① 请求了设备的 Extensible Mix 格式——Loopback 虚拟设备只接受普通 WAVEFORMATEX；② 缺少 AutoConvertPcm/SrcDefaultQuality 标志 |
+| 0x80070057 E_INVALIDARG @ Loopback Initialize | plain 格式结构体构造后未 Marshal.StructureToPtr 进 formatPtr，仍传了 Extensible 裸指针 |
+| 0xC0000005 AccessViolation @ IAudioCaptureClient.GetBuffer | Win8+ 的 GetBuffer 有 **5 个参数**（后两个 out ulong 设备位置/QPC 走栈），少声明两个 out 参数导致原生代码往调用方栈帧垃圾位置写值 |
 
 延迟测量方法：播放已知脉冲信号，录制目标设备输出，比对波形时间差；CPU 用 PerformanceCounter 采样。

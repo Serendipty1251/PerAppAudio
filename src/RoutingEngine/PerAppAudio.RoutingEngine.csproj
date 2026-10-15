@@ -2,12 +2,14 @@
 
   <ItemGroup>
     <ProjectReference Include="..\SessionManager\PerAppAudio.SessionManager.csproj" />
+    <ProjectReference Include="..\WasapiInterop\PerAppAudio.WasapiInterop.csproj" />
   </ItemGroup>
 
   <PropertyGroup>
-    <TargetFramework>net8.0</TargetFramework>
+    <TargetFramework>net8.0-windows</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
 
 </Project>
