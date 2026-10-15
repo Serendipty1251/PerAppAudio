@@ -3,6 +3,7 @@
 让 Windows 上每个应用程序独立选择音频输出设备的开源工具——打破"所有声音只有一个默认输出"的系统限制。
 
 - 状态：**P0 技术验证阶段**（2026-10-15 启动；手段A / 手段B2 均已实测验证）
+- 仓库：https://github.com/Serendipty1251/PerAppAudio
 - 平台：Windows 10 2004+ / 11（首版唯一平台；Linux / macOS 远期）
 - 协议：MIT
 - 隐私：纯本地运行，零网络请求，无遥测
@@ -28,6 +29,8 @@
 ## 构建
 
 ```bash
+git clone https://github.com/Serendipty1251/PerAppAudio.git
+cd PerAppAudio
 dotnet build
 dotnet run --project src/App.Cli   # P0 诊断入口
 ```
