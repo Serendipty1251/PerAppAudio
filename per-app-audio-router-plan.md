@@ -305,7 +305,7 @@ per-app-audio/
 1. **建仓**：本地 git 初始化，MIT LICENSE，README 骨架（已完成，见仓库根目录）；
 2. **脚手架**：.NET 8 solution，项目 `WasapiInterop` / `RoutingEngine`（`IRoutingBackend` + 手段A）/ `SessionManager` / `RuleEngine` / `App.Wpf` / `App.Cli`（已完成，`dotnet build` 0 警告 0 错误）；
 3. **PoC-1（手段A）**：**已完成**（2026-10-15，Win11 build 26200 实测）——进程级 loopback 捕获 → 渲染到第二设备全链路打通；实测见下表；
-4. **PoC-2（手段B2）**：IPolicyConfig 接口调用试验，记录 Win10 2004/22H2、Win11 23H2/24H2 版本矩阵结果（下一步）；
+4. **PoC-2（手段B2）**：**已完成**（2026-10-15，Win11 build 26200 实测）——`IAudioPolicyConfigFactory` 绑定成功，`SetPersistedDefaultAudioEndpoint` 持久化成功（注册表实锤）；发现语义限制与间歇性问题，详见下节；
 5. **产出《控制手段可行性报告》**，回填 §2.1 控制能力矩阵，定 P1 范围。
 
 **PoC-1 实测记录**（测试音 440Hz 从默认设备 XIBERIA K03S 播放，改道至 VoiceMeeter VAIO3）：
@@ -327,5 +327,30 @@ per-app-audio/
 | 0x88890011 AUDCLNT_E_EXCLUSIVE_MODE_ONLY @ Loopback Initialize | ① 请求了设备的 Extensible Mix 格式——Loopback 虚拟设备只接受普通 WAVEFORMATEX；② 缺少 AutoConvertPcm/SrcDefaultQuality 标志 |
 | 0x80070057 E_INVALIDARG @ Loopback Initialize | plain 格式结构体构造后未 Marshal.StructureToPtr 进 formatPtr，仍传了 Extensible 裸指针 |
 | 0xC0000005 AccessViolation @ IAudioCaptureClient.GetBuffer | Win8+ 的 GetBuffer 有 **5 个参数**（后两个 out ulong 设备位置/QPC 走栈），少声明两个 out 参数导致原生代码往调用方栈帧垃圾位置写值 |
+
+### PoC-2 手段B2 实测记录（每进程默认端点，免注入）
+
+**机制确认**（与 EarTrumpet / Windows 现代声音设置同款）：
+- 不是 COM 类 `CPolicyConfigClient`（那个只有全局 SetDefaultEndpoint），而是 WinRT 内部类 `Windows.Media.Internal.AudioPolicyConfig` 的**激活工厂** `IAudioPolicyConfigFactory`；
+- `RoGetActivationFactory` 绑定；IID `ab3d4648-e242-459f-b02f-541c70306324`（Win10 21H2+ / Win11）；接口 IInspectable 派生，25 个槽位后是 set/get 方法；
+- 设备 ID 必须包装为 `\\?\SWD#MMDEVAPI#{endpointId}#{e6327cad-dcec-4949-ae8a-991e976a79d2}`；
+- 持久化位置：`HKCU\Software\Microsoft\Multimedia\Audio\DefaultEndpoint\{hash}_0`，值 `000_000`(Console)/`001_000`(Multimedia) + `_p` 后缀的伴随 GUID。
+
+**实测结论**：
+
+| 项 | 结果 |
+| --- | --- |
+| 接口绑定（Win11 26200） | ✅ 成功 |
+| SetPersistedDefaultAudioEndpoint | ✅ 成功（注册表实锤：双角色、正确设备 ID、正确包装格式） |
+| GetPersistedDefaultAudioEndpoint | ✅ 成功过（读回设备 ID） |
+| Clear（清除覆盖） | ✅ 成功过（恢复跟随系统默认） |
+| **运行中进程实时迁移** | ❌ **不支持**——已播放的音频流留在原设备，路由只在应用**创建新音频会话**时生效（应用重启或新流） |
+| API 稳定性 | ⚠️ **间歇性 E_INVALIDARG**：成功 set 之后，同进程的 get/set/clear 随后调用有相当概率返回 0x80070057；对 explorer 等长驻进程一次成功；短命测试进程时序敏感 |
+
+**对产品设计的影响（重要）**：
+1. **B2 是「持久化每程序路由」，不是「实时改道」**——天然适合「应用启动 → 规则生效」的产品主场景，但不能 redirect 正在播放的应用；
+2. 实时改道必须靠**手段A**（已验证 0 丢帧/实时率 100%）或 B1（注入）；
+3. **策略调度需重试设计**：B2 调用可能间歇性 E_INVALIDARG，应重试 N 次后回退 A，并把「已持久化但未生效」与「调用失败」区分开；
+4. 策略调度「成功」的判定标准要改为：B2 set 返回成功 = 路由已持久化（对后续会话生效），当前会话的实时迁移由 A 负责——**A+B 组合拳**：B 负责未来，A 负责现在。
 
 延迟测量方法：播放已知脉冲信号，录制目标设备输出，比对波形时间差；CPU 用 PerformanceCounter 采样。

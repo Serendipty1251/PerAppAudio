@@ -2,7 +2,7 @@
 
 让 Windows 上每个应用程序独立选择音频输出设备的开源工具——打破"所有声音只有一个默认输出"的系统限制。
 
-- 状态：**P0 技术验证阶段**（2026-10-15 启动；手段A 全链路已实测打通）
+- 状态：**P0 技术验证阶段**（2026-10-15 启动；手段A / 手段B2 均已实测验证）
 - 平台：Windows 10 2004+ / 11（首版唯一平台；Linux / macOS 远期）
 - 协议：MIT
 - 隐私：纯本地运行，零网络请求，无遥测
@@ -55,12 +55,27 @@ dotnet run --project src/App.Cli -- test                                  # COM 
 | 拆除恢复 | 原会话正常恢复 | 达标 |
 | 流水线缓冲 | 采集 10ms(480帧) + 渲染 10ms(1056帧) | 端到端约 20ms+ |
 
+## P0-2 手段B2 实测结果（2026-10-15，Win11 build 26200）
+
+机制：WinRT 内部类 `Windows.Media.Internal.AudioPolicyConfig` 激活工厂 `IAudioPolicyConfigFactory`（EarTrumpet / Windows 现代声音设置同款，需 Win10 21H2+）。
+
+| 项 | 结果 |
+| --- | --- |
+| 接口绑定 | 成功 |
+| SetPersistedDefaultAudioEndpoint | **成功**（注册表实锤：`HKCU\...\DefaultEndpoint\{hash}_0` 双角色写入正确设备） |
+| Get / Clear | 成功过（读回设备 ID / 恢复默认） |
+| 运行中进程实时迁移 | **不支持**——路由持久化每程序，只在应用创建新音频会话时生效 |
+| API 稳定性 | 间歇性 E_INVALIDARG（成功后同进程后续调用可能失败）→ 产品侧重试 + 回退设计 |
+
+**产品结论**：B2 管「未来」（应用启动即按路由走），A 管「现在」（正在播放的应用实时改道）——A+B 组合拳。
+
 ## 项目结构
 
 ```
 src/
 ├── WasapiInterop/     # WASAPI P/Invoke + COM 接口声明（vtable 顺序与 SDK 头文件严格一致）
-├── RoutingEngine/     # 控制手段层：IRoutingBackend + 手段A 实现（LoopbackBackend/采集/渲染）
+│                      # + IAudioPolicyConfigFactory（手段B2，未公开接口）
+├── RoutingEngine/     # 控制手段层：IRoutingBackend + 手段A(LoopbackBackend) + 手段B(EndpointBackend)
 ├── SessionManager/    # 会话枚举、进程识别、音量守护
 ├── RuleEngine/        # 规则匹配、场景、触发器（调用层）
 ├── App.Wpf/           # 托盘与主界面（调用层）

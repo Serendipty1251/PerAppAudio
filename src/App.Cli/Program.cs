@@ -1,6 +1,7 @@
 ﻿using System.Diagnostics;
 using System.Runtime.InteropServices;
 using PerAppAudio.RoutingEngine;
+using PerAppAudio.RoutingEngine.Audio;
 using PerAppAudio.RoutingEngine.Backends;
 using PerAppAudio.SessionManager;
 using PerAppAudio.WasapiInterop;
@@ -24,6 +25,8 @@ internal static class Program
                 "devices" => ListDevices(),
                 "sessions" => ListSessions(args),
                 "route" => RunRoute(args),
+                "endpoint" => RunEndpoint(args),
+                "devlisten" => RunDevListen(args),
                 "test" => RunInteropTest(),
                 "help" or "--help" or "-h" => Usage(),
                 var cmd => Unknown(cmd),
@@ -45,10 +48,16 @@ internal static class Program
              sessions [--device <ID|名称>] 列出音频会话（默认默认设备）
              route --pid <PID> --to <ID|名称> [--ms <时长>] [--buffer <缓冲ms>] [--keep]
                                          手段A 路由试验（默认 10 秒后自动拆除）
+             endpoint probe               探测手段B2（IAudioPolicyConfigFactory）可用性
+             endpoint set --pid <PID> --to <ID|名称>   手段B2：设置每进程默认端点
+             endpoint get --pid <PID>     手段B2：读回每进程默认端点
+             endpoint clear --pid <PID>   手段B2：清除端点覆盖
+             devlisten --device <ID|名称> [--ms <时长>]   监听设备播放能量（验证迁移用）
 
             示例:
              devices
              route --pid 12345 --to "Realtek HD Audio 2nd output" --ms 30000
+             endpoint set --pid 12345 --to "VoiceMeeter VAIO3"
             """);
         return 0;
     }
@@ -57,6 +66,95 @@ internal static class Program
     {
         Console.Error.WriteLine($"未知命令: {cmd}");
         return Usage();
+    }
+
+    /// <summary>设备级 Loopback 探针：监听指定设备正在播放的音频能量（验证音频迁移用）。</summary>
+    private static int RunDevListen(string[] args)
+    {
+        var to = GetOption(args, "--device") ?? GetOption(args, "--to") ?? throw new InvalidOperationException("缺少 --device");
+        int ms = int.TryParse(GetOption(args, "--ms"), out int m) ? m : 3000;
+        var device = DeviceManager.ResolveDevice(to);
+
+        Console.WriteLine($"监听设备: {device.FriendlyName}（{ms} ms）...");
+        var probe = DeviceLoopbackProbe.Listen(device.Id, ms);
+        double rms = probe.FinalRms();
+        string verdict = rms > 0.001 ? "有信号" : "静默";
+        Console.WriteLine($"[结果] RMS {rms:F6} / Peak {probe.Peak:F6} / 采样 {probe.SampleCount} → {verdict}");
+        return 0;
+    }
+
+    /// <summary>
+    /// 手段B2 诊断：每进程默认端点设置（IAudioPolicyConfigFactory，Win10 21H2+）。
+    /// endpoint probe | set --pid N --to <ID|名称> | get --pid N | clear --pid N
+    /// </summary>
+    private static int RunEndpoint(string[] args)
+    {
+        var sub = args.Length > 1 ? args[1].ToLowerInvariant() : "probe";
+        var backend = new EndpointBackend();
+
+        switch (sub)
+        {
+            case "probe":
+            {
+                var probe = backend.ProbeAsync().AsTask().GetAwaiter().GetResult();
+                Console.WriteLine($"[探测] 手段B2 可用性: {probe.Available} {probe.Reason}");
+                return probe.Available ? 0 : 1;
+            }
+
+            case "set":
+            {
+                if (!int.TryParse(GetOption(args, "--pid"), out int pid) || pid <= 0)
+                {
+                    Console.Error.WriteLine("缺少或非法的 --pid");
+                    return 2;
+                }
+                var to = GetOption(args, "--to") ?? throw new InvalidOperationException("缺少 --to");
+                var device = DeviceManager.ResolveDevice(to);
+                var command = new RoutingCommand(pid, $"pid:{pid}", new AudioDeviceRef(device.FriendlyName, device.Id), 1.0f, false);
+                var result = backend.ApplyAsync(command).AsTask().GetAwaiter().GetResult();
+                Console.WriteLine($"[设置] {(result.Success ? "成功" : "失败")} {result.Message}");
+                if (result.Success)
+                {
+                    var readback = backend.GetPersistedEndpoint(pid);
+                    Console.WriteLine($"[读回] {(readback is null ? "读取失败" : readback.Length == 0 ? "(跟随系统默认)" : readback)}");
+                }
+                return result.Success ? 0 : 1;
+            }
+
+            case "get":
+            {
+                if (!int.TryParse(GetOption(args, "--pid"), out int pid) || pid <= 0)
+                {
+                    Console.Error.WriteLine("缺少或非法的 --pid");
+                    return 2;
+                }
+                var route = backend.GetPersistedEndpoint(pid);
+                if (route is null)
+                {
+                    Console.WriteLine("[读回] 失败（手段B2 不可用）");
+                    return 1;
+                }
+                Console.WriteLine($"[读回] {(route.Length == 0 ? "(跟随系统默认)" : route)}");
+                return 0;
+            }
+
+            case "clear":
+            {
+                if (!int.TryParse(GetOption(args, "--pid"), out int pid) || pid <= 0)
+                {
+                    Console.Error.WriteLine("缺少或非法的 --pid");
+                    return 2;
+                }
+                var command = new RoutingCommand(pid, $"pid:{pid}", new AudioDeviceRef("(clear)", "(clear)"), 1.0f, false);
+                var result = backend.RemoveAsync(command).AsTask().GetAwaiter().GetResult();
+                Console.WriteLine($"[清除] {(result.Success ? "成功" : "失败")} {result.Message}");
+                return result.Success ? 0 : 1;
+            }
+
+            default:
+                Console.Error.WriteLine($"未知子命令: {sub}（probe / set / get / clear）");
+                return 2;
+        }
     }
 
     private static int RunInteropTest()
