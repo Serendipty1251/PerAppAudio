@@ -1,0 +1,13 @@
+## .NET build results
+bin/
+obj/
+[Dd]ebug/
+[Rr]elease/
+publish/
+*.user
+*.suo
+.vs/
+.idea/
+
+## WorkBuddy local data
+.workbuddy/

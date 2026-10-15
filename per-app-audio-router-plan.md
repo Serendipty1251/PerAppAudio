@@ -1,0 +1,311 @@
+# PerAppAudio — 每应用音频输出路由工具 · 项目规划
+
+> 版本：v1.0（2026-10-15） · 状态：**已定稿**（三项决策全部落定，P0 启动）
+> 沿革：v0.2 A/B 双轨用户自选 → v0.3 控制手段为第一优先级 → v1.0 定稿（名称 PerAppAudio / C# 单体 / Windows 首版）
+
+## 1. 项目定位
+
+**一句话：让每个应用程序独立选择音频输出设备，打破"所有声音只有一个默认输出"的系统限制。**
+
+**产品本质：一个「音频走向控制引擎」。** 第一优先级不是界面、不是规则自动化，而是**控制音频走向的手段**——把指定应用的音频可靠地引向指定输出设备的能力（指定设备、独立音量 / 静音、运行中动态改道）。手段 A / B / C 是产品核心；手段选择、规则、场景、UI 只是调用层。
+
+| 项 | 内容 |
+| --- | --- |
+| 核心价值 | 游戏走音箱、会议走耳机、音乐走蓝牙，互不干扰、独立调音量 |
+| 项目名称 | **PerAppAudio**（仓库 per-app-audio，MIT） |
+| 目标平台 | Windows 10 2004+ / 11（首版唯一平台）；Linux (PipeWire)、macOS 远期 |
+| 开源协议 | MIT（利于生态与二次分发） |
+| 分发方式 | 绿色版 + MSIX/WinGet；Authenticode 签名规避 SmartScreen 拦截 |
+| 隐私承诺 | 纯本地运行、零网络请求、无遥测（开源信任基础） |
+
+**开发优先级声明**：
+
+| 层级 | 内容 | 优先级 |
+| --- | --- | --- |
+| 控制手段层 | 手段A 流重定向 / 手段B 端点重定向 / 手段C 虚拟设备；策略调度与失败回退 | **P0 核心** |
+| 调用层 | 主控制台、托盘、CLI、规则、场景、触发器 | P1 次要 |
+
+**痛点**：Windows 11 虽在「设置 › 系统 › 声音 › 应用音量和设备首选项」提供每应用输出选择，但覆盖不全、无法自动切换、无规则引擎、无独立音量持久化；Windows 10 无此能力。
+
+**对标分析**：
+
+| 产品 | 类型 | 优点 | 不足 |
+| --- | --- | --- | --- |
+| VoiceMeeter | 免费闭源 | 成熟稳定、虚拟混音 | 需手动搭跳线、无自动规则、界面复杂 |
+| CheVolume | 闭源收费 | 每应用设备切换 | 收费、不透明、无规则引擎 |
+| EarTrumpet | 开源 | UI 好、每应用音量 | 依赖 Win11 部分能力、无自动规则（待调研） |
+| Audio Router | 开源（停更） | 轻量 | 依赖未公开 API、仅旧系统、已废弃 |
+| PipeWire (Linux) | 系统原生 | 完整 per-app 路由 | 仅限 Linux |
+
+## 2. 需求分析
+
+### 2.1 核心需求：音频走向控制能力
+
+手段之间的差异即产品差异，用控制能力矩阵刻画：
+
+| 控制能力 | 手段A 流重定向 | 手段B 端点重定向 | 手段C 虚拟设备 |
+| --- | --- | --- | --- |
+| 指定应用 → 指定输出设备 | ✅ | ✅ | ✅ |
+| 目标设备上独立音量 / 静音 | ✅ | ✅ | ✅ |
+| 运行中动态改道 | ✅ | ✅ | ✅ |
+| 端到端延迟 | 30–60ms | < 10ms | < 10ms |
+| 对宿主应用侵入 | 无 | 无（B2/B3） | 无 |
+| 系统 / 驱动要求 | Win10 2004+ | 实测（B2/B3） | EV 签名驱动 |
+| 音质损失 | 轻度重采样 | 原生 | 原生 |
+
+### 2.2 调用层需求（次要）
+
+| 优先级 | 功能 |
+| --- | --- |
+| P0 | 手段选择：A / B / 自动（可按应用覆盖） |
+| P1 | 主控制台（每应用设备 / 音量 / 手段）、托盘快捷切换 |
+| P1 | 场景 Profile 一键切换；设备插拔自动路由 |
+| P2 | 定时 / 前台窗口触发规则；CLI + REST API |
+| P3 | 每应用电平表；Linux / macOS 适配 |
+
+### 2.3 非功能需求
+
+| 项 | 指标 |
+| --- | --- |
+| 延迟 | 手段A ≤ 60ms；手段B < 10ms（双档并存） |
+| CPU | 单路音频路由 < 3% |
+| 稳定性 | 进程退出自动清理；手段B 失败 2 秒内自动回退手段A |
+| 兼容 | Win10 2004+；共享 / 独占模式混合环境可降级 |
+
+### 2.4 已知边界（诚实清单，需在文档与 UI 明示）
+
+- 浏览器多标签同属一个进程，无法按标签拆分（Chrome 音频线程模型限制）；
+- 系统提示音归属 Explorer.exe，需内置「系统声音」特殊规则；
+- UWP / 沙盒应用音频宿主进程特殊，需 PoC 实测后列入支持 / 不支持清单；
+- 独占模式应用：手段A 无法捕获；手段B 可尝试，需实测。
+
+## 3. 总体架构
+
+五层分层架构，MVP 全程用户态运行，无内核驱动：
+
+```mermaid
+flowchart TD
+    UI["调用层：托盘 / 主控制台 / CLI / REST API"] --> RE["规则引擎：进程→设备映射 / 场景 Profile / 触发器"]
+    RE --> SM["会话管理：音频会话枚举 / 进程识别 PID→路径 / 音量·静音守护"]
+    SM --> SCH{"策略调度：手段自动选择与失败回退"}
+    SCH --> CA["手段A：进程 Loopback 重定向（loopback→重采样→渲染）"]
+    SCH --> CB["手段B：默认端点引导（B2 PolicyConfig / B3 系统存储 / B1 注入·默认关）"]
+    SCH -.-> CC["手段C：虚拟声卡混音（远期）"]
+    CA --> DL["设备层：MMDeviceEnumerator 枚举·插拔监听 / WASAPI 采集与渲染"]
+    CB --> DL
+    CC -.-> DL
+```
+
+| 层 | 职责 | 关键 Windows API |
+| --- | --- | --- |
+| 调用层 | 托盘、主控制台、CLI、REST API（规则引擎亦属调用层） | — |
+| 会话管理 | 枚举音频会话、PID→可执行路径 / 签名识别、音量与静音守护 | IAudioSessionManager2、ISimpleAudioVolume、IAudioSessionEvents |
+| 控制手段层 | 手段A 管线、手段B 端点引导、**策略调度**（自动选择 + 回退） | ActivateAudioInterfaceAsync（AUDIOCLIENT_ACTIVATION_PARAMS）、IAudioClient / IAudioCaptureClient / IAudioRenderClient；B2/B3 见 §4.2 |
+| 设备层 | 设备枚举、插拔监听、采集与渲染 | IMMDeviceEnumerator、IMMNotificationClient |
+
+## 4. 控制手段设计（A/B 双轨 + C 预留）
+
+### 4.1 手段对比
+
+| 维度 | 手段A：进程 Loopback 重定向 | 手段B：默认端点引导 | 手段C：虚拟声卡混音 |
+| --- | --- | --- | --- |
+| 原理 | 进程级 loopback 捕获 → 原会话静音 → 渲染到目标设备 | 把应用的默认输出端点改为目标设备，应用直接播放 | 多条虚拟音频线 + 混音引擎按规则分派 |
+| 端到端延迟 | 30–60ms | < 10ms | < 10ms |
+| 驱动 / 签名 | 无，纯用户态 | B2/B3 无；B1 注入有杀软风险 | 需 EV 签名驱动，或依赖用户已装 VB-Cable |
+| 音质 | 共享格式 48kHz，轻度重采样 | 原生 | 原生 |
+| 稳定性 | 高（全公开 API） | 中（依赖未公开接口 / 系统行为） | 高 |
+| 适用场景 | 通用兜底（游戏语音、音乐、会议） | 低延迟竞技游戏、实时语音 | 专业音频、多设备混音 |
+
+### 4.2 手段B 的三个候选实现（P0 实测后定主推）
+
+| 子方案 | 做法 | 优点 | 风险 |
+| --- | --- | --- | --- |
+| B1 注入 Hook | 向目标进程注入 DLL，Hook IMMDeviceEnumerator::GetDefaultAudioEndpoint | 延迟最低、控制最细 | 杀软误报、Win11 兼容性、进程重启需重注 |
+| B2 IPolicyConfig 接口 | 调用未公开的 PolicyConfig 系列 COM 接口设置每进程默认端点（SoundVolumeView 已有先例） | 无注入、无杀软问题、延迟低 | 接口未文档化，需版本兼容探测 |
+| B3 Win11 系统 per-app 存储 | 引导 Win11 22H2+ 自带的每应用端点持久化 | 最稳、官方行为 | 仅 Win11 22H2+，存储位置未公开 |
+
+**推荐**：B2 主推，B3 验证后并入，B1 作为高级选项**默认关闭**（UI 明示风险）。
+
+### 4.3 策略调度（手段选择与回退）
+
+- 全局默认「**自动**」：优先尝试 B；探测失败 / 不支持 → 自动回退 A；
+- 每应用可强制指定：`A` / `B` / `自动`；
+- 自动判定因素：手段B 可用性探测、进程类型（UWP / 独占 → A）、用户延迟偏好；
+- **安全网**：B 设置后 2 秒内目标设备未出现该应用会话（或播放异常）→ 自动切 A 并通知用户。产品在任何情况下不会"没声音"。
+
+## 5. 技术选型
+
+| 层 | 选型 | 理由 |
+| --- | --- | --- |
+| 语言 | C# / .NET 8 | WASAPI P/Invoke 生态成熟、迭代快；核心引擎接口化，便于后续换 C++/Rust |
+| 音频 | 自研 WASAPI 封装（NAudio 备用） | 进程级 loopback 与 PolicyConfig 均需手写互操作，现有库覆盖不足 |
+| UI | WPF 先行，Avalonia 作跨平台储备 | Windows 优先 |
+| 配置 | YAML 规则文件 + SQLite 运行时状态 | 人类可读、可 Git 版本管理 |
+| 分发 | MSIX + winget manifest | 现代安装体验 |
+| CI | GitHub Actions | 自动构建 / 测试 / 发布 |
+
+### 5.1 语言栈决策：C# 单体 vs C++ 核心
+
+| 维度 | C# 单体（.NET 8 全栈） | C++ 核心 + C# UI |
+| --- | --- | --- |
+| 开发速度 | 快 2–3 倍：单语言、单工具链、UI 与引擎零边界 | 慢：跨语言边界（C++/CLI / COM / P/Invoke 包装各有坑） |
+| UI 生态 | WPF 数据绑定 / 托盘 / 动画开箱即用 | UI 层仍要 C#，核心另起一套 |
+| 内存安全 | GC + 边界检查，崩溃风险低 | 全靠自己：泄漏 / UB / 爆音难查 |
+| 延迟确定性 | GC 停顿需用对象池 / ArrayPool 规避 | 无 GC，线程优先级 / 锁-free 精细可控 |
+| Windows API 适配 | WASAPI 需 P/Invoke，结构体 / vtable 顺序易错 | WASAPI / COM 原生 ABI 直调，零摩擦 |
+| 手段 B1 注入 | 原生 DLL 才行；C# 注入需 CLR 宿主，杀软更敏感 | 唯一自然选择 |
+| 性能上限 | 热点可 System.Numerics SIMD，后期抽原生库 | SIMD intrinsics 精调，CPU 更低 |
+| 分发 | 需 .NET 运行时（自包含发布约 +70MB） | 原生 exe 无运行时依赖 |
+| 贡献者门槛 | 低，C# 基数大 | 高 |
+| 手段 C 扩展 | 不可行（驱动需 C） | 唯一路径（WDK 是 C） |
+
+**结论（v1.0 已定稿）**：本项目是「控制流密集」而非「计算密集」——三种手段的核心动作是设置端点、启停会话、搬移缓冲区，延迟瓶颈在 Windows 音频栈本身而非语言；叠加单人开发 + 开源贡献生态，C# 快 2–3 倍。**定稿：C# 单体先行**：控制手段层以 `IRoutingBackend` 接口抽象，后期把重采样热点与 B1 注入模块抽为原生库经 P/Invoke 加载——两条路的优点都能拿到。
+
+## 6. 功能详设（按优先级重排）
+
+### 6.1 手段A：音频管线（P0 核心）
+
+- 采集：进程级 Loopback（Win10 2004+，`ProcessLoopbackMode = INCLUDE_TARGET_PROCESS_TREE`）；
+- 缓冲：10ms 共享缓冲 + 事件驱动 + 无锁环形队列；
+- 转换：内部统一 float32 / 48kHz，输出端按目标设备格式重采样、声道映射、爆音保护；
+- 降级：目标设备被独占占用时优雅提示，不崩溃。
+
+### 6.2 手段B：端点引导器（P0 核心）
+
+- 能力探测：启动时探测 B2/B3 接口可用性与系统版本，写入「本机能力表」；
+- 设置：对目标进程设置默认输出端点；验证 2 秒内目标设备出现该应用会话；
+- 回退：验证失败或后续异常 → 自动切手段A 并通知；
+- B1 注入：默认关闭，设置页明示杀软风险后可由用户手动开启。
+
+### 6.3 策略调度（P0 核心）
+
+- 手段选择：按 §4.3 规则决定每个应用使用哪种手段；
+- 状态机：应用中 → 已改道 → 守护中 → 异常回退 → 已清理；
+- 冲突解决：同一应用多条规则命中时，精确路径 > 进程名 > 通配符，后者让位。
+
+### 6.4 会话管理器（P0 依赖）
+
+- 枚举：IAudioSessionEnumerator 遍历设备会话，取 PID、DisplayName、IconPath；
+- 识别：PID → 可执行路径 → 签名校验；规则绑定**路径 / 签名**而非 PID（抗进程重启）；
+- 守护：应用可能自行重置音量 / 取消静音，需 500ms 内轮询纠正 + 监听 IAudioSessionEvents；
+- 生命周期：会话断开、进程退出自动拆除路由，无残留。
+
+### 6.5 规则引擎与场景（P1 调用层）
+
+```yaml
+version: 1
+
+# 全局默认手段：auto = 优先 B，失败自动回退 A
+default_mode: auto
+
+# 设备别名：避免设备名随接口编号漂移（ID 可在软件内一键填充）
+devices:
+  speaker: "{0.0.0.00000000}.{xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx}"
+  headset: "Realtek HD Audio 2nd output"
+
+profiles:
+  - name: "游戏场景"
+    rules:
+      - match:
+          process_path: "C:\Riot Games\VALORANT\live\VALORANT-Win64-Shipping.exe"  # 精确路径 > 进程名 > 通配符
+          # 也可写: process: "*.exe" / window_title: "*Valorant*"
+        action:
+          device: speaker
+          mode: auto          # auto / loopback(强制A) / endpoint(强制B)
+          volume: 0.8         # 0.0–1.0
+          mute: false
+      - match: { process: "Discord.exe" }
+        action: { device: headset, mode: endpoint, volume: 0.6 }   # 语音软件强制走 B（低延迟）
+    triggers:
+      - type: device_connected
+        device_name: "*Headset*"
+      - type: process_started
+        process: "steam.exe"
+
+  - name: "工作场景"
+    rules:
+      - match: { process: "chrome.exe" }
+        action: { device: headset, mode: auto, volume: 1.0 }
+      - match: { process: "explorer.exe" }     # 系统提示音
+        action: { device: speaker, mode: loopback }
+```
+
+| 字段 | 取值 | 说明 |
+| --- | --- | --- |
+| `default_mode` | `auto` / `loopback` / `endpoint` | 全局默认；`auto` = 优先 B、失败回退 A |
+| `match` | `process_path` / `process` / `window_title` | 匹配优先级：路径 > 进程名 > 通配符 |
+| `action.device` | 设备别名 / 设备 ID / 设备名 | 别名在 `devices` 段定义 |
+| `action.mode` | `auto` / `loopback` / `endpoint` | 覆盖全局手段；`loopback` = 强制 A，`endpoint` = 强制 B |
+| `action.volume` / `mute` | 0.0–1.0 / true·false | 该应用在目标设备上的音量与静音 |
+| `triggers` | 见示例 | 满足任一条件时自动切换到该 Profile |
+
+### 6.6 CLI / REST（P2 调用层）
+
+本地 HTTP API + 命令行，供脚本与 HomeAssistant 集成；P1 阶段只做内部调试用最小命令集。
+
+## 7. 关键技术难点与对策
+
+| 难点 | 对策 |
+| --- | --- |
+| 进程级 loopback 仅支持 Win10 2004+ | 明确最低系统版本，老系统启动即提示 |
+| B2/B3 未公开接口，版本差异大 | P0 做版本矩阵实测（Win10 2004/22H2、Win11 23H2/24H2）；调用前能力探测；失败即回退 A |
+| 应用自行重置音量 / 静音 | 守护轮询 + IAudioSessionEvents 事件纠正 |
+| 延迟累积（采集 + 重采样 + 渲染） | 10ms 缓冲 + 事件驱动；提供低延迟档位 |
+| 源 / 目标设备格式不一致（44.1k vs 48k vs 独占） | 内部 float32 统一格式，输出端重采样 |
+| Chrome 等进程频繁重启 | 规则绑定可执行路径 + 证书签名 |
+| UWP / 沙盒应用宿主进程 | PoC 阶段实测，失败列入「不支持清单」 |
+| 系统声音归属 Explorer | 内置「系统声音」虚拟会话特殊处理 |
+
+## 8. 路线图（按手段优先级重排）
+
+| 阶段 | 周期 | 目标 | 验收标准 |
+| --- | --- | --- | --- |
+| P0 手段验证 | 1–2 周 | 三种手段的控制能力实测 | 《控制手段可行性报告》：A 延迟 < 60ms、CPU < 3%、无爆音；B 至少一种子方案在 ≥ 2 个系统版本生效且 < 10ms；控制能力矩阵填写完毕 |
+| P1 控制闭环 | 3–4 周 | 最小可用走向控制：指定应用 → 指定设备、可动态改道、策略调度与自动回退 | 单应用改道成功率 ≥ 99%；B 失败 2s 内回退 A；UI 仅保留必要控件 |
+| P2 调度层 | 2–3 周 | 规则、场景 Profile、触发器、CLI | 一键切换 200ms 内生效 |
+| P3 发布 | 2 周 | Authenticode 签名、MSIX、winget、文档、CI | 全新 Win11 安装即用 |
+| P4 远期 | 待定 | 手段C、Linux (PipeWire) / macOS、插件化 | — |
+
+## 9. 风险与缓解
+
+| 风险 | 等级 | 缓解 |
+| --- | --- | --- |
+| B 全部子方案失效（系统更新） | 中 | A 兜底保证产品始终可用；B 失败自动回退；接口调用全部包版本探测 |
+| 注入方案杀软 / Defender 误报 | 中 | B1 默认关闭，UI 明示风险；主推 B2 无注入 |
+| Windows 更新破坏 API | 中 | 只用公开 API + 版本探测降级 |
+| 调用层功能蔓延拖慢核心 | 中 | P1 严格限定 UI 最小集；调度层功能全部排到 P2 |
+| 单人维护精力不足 | 高 | 范围克制：P1 只做手段A 全功能 + 手段B2 最小可用 |
+| 法律合规 | 低 | MIT；无专利算法；不逆向私有协议 |
+
+## 10. 仓库结构（建议）
+
+```
+per-app-audio/
+├── src/
+│   ├── RoutingEngine/    # 控制手段层：手段A管线 / 手段B端点引导 / 策略调度
+│   ├── SessionManager/   # 会话枚举、进程识别、音量守护
+│   ├── RuleEngine/       # 规则匹配、场景、触发器（调用层）
+│   ├── App.Wpf/          # 托盘与主界面（调用层）
+│   └── App.Cli/          # CLI / REST（调用层）
+├── tests/                # 单元测试 + 回环集成测试
+├── docs/                 # 架构文档、规则 DSL、贡献指南
+└── .github/workflows/    # CI
+```
+
+## 11. 决策记录（v1.0 定稿）
+
+| # | 决策项 | 结论 | 日期 |
+| --- | --- | --- | --- |
+| D1 | 项目名称 | **PerAppAudio** | 2026-10-15 |
+| D2 | 技术栈 | **C# 单体先行**（.NET 8 全栈）；控制手段层抽象 `IRoutingBackend`，重采样热点与 B1 注入模块后期抽原生库 P/Invoke 加载 | 2026-10-15 |
+| D3 | 首版平台 | **仅 Windows 10 2004+ / 11**；Linux (PipeWire) / macOS 远期 | 2026-10-15 |
+
+## 12. P0 启动清单（按序执行）
+
+1. **建仓**：本地 git 初始化，MIT LICENSE，README 骨架（已完成，见仓库根目录）；
+2. **脚手架**：.NET 8 solution，项目 `RoutingEngine`（`IRoutingBackend` + 手段A/B）/ `SessionManager` / `RuleEngine` / `App.Wpf` / `App.Cli`（已完成，`dotnet build` 通过）；
+3. **PoC-1（手段A）**：枚举设备 → 选目标进程 → 进程级 loopback 捕获 → 渲染到第二设备；测延迟 / CPU / 爆音；
+4. **PoC-2（手段B2）**：IPolicyConfig 接口调用试验，记录 Win10 2004/22H2、Win11 23H2/24H2 版本矩阵结果；
+5. **产出《控制手段可行性报告》**，回填 §2.1 控制能力矩阵，定 P1 范围。
+
+延迟测量方法：播放已知脉冲信号，录制目标设备输出，比对波形时间差；CPU 用 PerformanceCounter 采样。

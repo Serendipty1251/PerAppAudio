@@ -1,0 +1,55 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "src", "src", "{650368B9-6490-40FB-A8CA-57F58E0E5B76}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "PerAppAudio.RoutingEngine", "src\RoutingEngine\PerAppAudio.RoutingEngine.csproj", "{8BC0F2D8-B250-43F6-A024-A1D4F6A92CDD}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "PerAppAudio.SessionManager", "src\SessionManager\PerAppAudio.SessionManager.csproj", "{3804B734-0712-4C52-860C-4E8F0E1587A0}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "PerAppAudio.RuleEngine", "src\RuleEngine\PerAppAudio.RuleEngine.csproj", "{4189D964-C132-4068-A123-D32086218B72}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "PerAppAudio.App.Cli", "src\App.Cli\PerAppAudio.App.Cli.csproj", "{3DA409D9-9CDA-4291-A34F-A90902C090A8}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "PerAppAudio.App.Wpf", "src\App.Wpf\PerAppAudio.App.Wpf.csproj", "{ED7FDF52-4658-40D2-9732-CB0E46FA12F6}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{8BC0F2D8-B250-43F6-A024-A1D4F6A92CDD}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{8BC0F2D8-B250-43F6-A024-A1D4F6A92CDD}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{8BC0F2D8-B250-43F6-A024-A1D4F6A92CDD}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{8BC0F2D8-B250-43F6-A024-A1D4F6A92CDD}.Release|Any CPU.Build.0 = Release|Any CPU
+		{3804B734-0712-4C52-860C-4E8F0E1587A0}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{3804B734-0712-4C52-860C-4E8F0E1587A0}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{3804B734-0712-4C52-860C-4E8F0E1587A0}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{3804B734-0712-4C52-860C-4E8F0E1587A0}.Release|Any CPU.Build.0 = Release|Any CPU
+		{4189D964-C132-4068-A123-D32086218B72}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{4189D964-C132-4068-A123-D32086218B72}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{4189D964-C132-4068-A123-D32086218B72}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{4189D964-C132-4068-A123-D32086218B72}.Release|Any CPU.Build.0 = Release|Any CPU
+		{3DA409D9-9CDA-4291-A34F-A90902C090A8}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{3DA409D9-9CDA-4291-A34F-A90902C090A8}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{3DA409D9-9CDA-4291-A34F-A90902C090A8}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{3DA409D9-9CDA-4291-A34F-A90902C090A8}.Release|Any CPU.Build.0 = Release|Any CPU
+		{ED7FDF52-4658-40D2-9732-CB0E46FA12F6}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{ED7FDF52-4658-40D2-9732-CB0E46FA12F6}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{ED7FDF52-4658-40D2-9732-CB0E46FA12F6}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{ED7FDF52-4658-40D2-9732-CB0E46FA12F6}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(NestedProjects) = preSolution
+		{8BC0F2D8-B250-43F6-A024-A1D4F6A92CDD} = {650368B9-6490-40FB-A8CA-57F58E0E5B76}
+		{3804B734-0712-4C52-860C-4E8F0E1587A0} = {650368B9-6490-40FB-A8CA-57F58E0E5B76}
+		{4189D964-C132-4068-A123-D32086218B72} = {650368B9-6490-40FB-A8CA-57F58E0E5B76}
+		{3DA409D9-9CDA-4291-A34F-A90902C090A8} = {650368B9-6490-40FB-A8CA-57F58E0E5B76}
+		{ED7FDF52-4658-40D2-9732-CB0E46FA12F6} = {650368B9-6490-40FB-A8CA-57F58E0E5B76}
+	EndGlobalSection
+EndGlobal
