@@ -1,13 +1,135 @@
-﻿using System.Configuration;
-using System.Data;
+﻿using System.IO;
 using System.Windows;
+using System.Windows.Threading;
+using PerAppAudio.RuleEngine;
+using WinForms = System.Windows.Forms;
 
 namespace PerAppAudio.App.Wpf;
 
 /// <summary>
-/// Interaction logic for App.xaml
+/// 应用入口：单实例互斥 + AppHost 常驻核心 + 托盘。
 /// </summary>
-public partial class App : Application
+public partial class App : System.Windows.Application
 {
-}
+    private AppHost? _host;
+    private MainWindow? _window;
+    private WinForms.NotifyIcon? _tray;
+    private WinForms.ContextMenuStrip? _trayMenu;
 
+    public static string LogPath =>
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "PerAppAudio", "app.log");
+
+    public AppHost Host => _host ?? throw new InvalidOperationException("AppHost 未初始化");
+
+    protected override void OnStartup(StartupEventArgs e)
+    {
+        base.OnStartup(e);
+
+        _host = AppHost.TryAcquireSingleInstance();
+        if (_host is null)
+        {
+            System.Windows.MessageBox.Show(
+                "PerAppAudio 已在运行（单实例）。请查看系统托盘图标。",
+                "PerAppAudio",
+                MessageBoxButton.OK,
+                MessageBoxImage.Information);
+            Shutdown();
+            return;
+        }
+
+        // 常驻日志：内存 + 落盘（%APPDATA%\PerAppAudio\app.log）
+        _host.Log += msg =>
+        {
+            string line = $"{DateTime.Now:HH:mm:ss} {msg}";
+            Dispatcher.BeginInvoke(DispatcherPriority.Background, () =>
+            {
+                try
+                {
+                    Directory.CreateDirectory(Path.GetDirectoryName(LogPath)!);
+                    File.AppendAllText(LogPath, line + Environment.NewLine);
+                }
+                catch
+                {
+                    // 日志落盘失败不影响主流程
+                }
+            });
+        };
+
+        _window = new MainWindow();
+        _window.Show();
+
+        InitTray();
+
+        _ = _host.StartAsync();
+    }
+
+    public void ShowMainWindow() => _window?.ShowFromTray();
+
+    private void InitTray()
+    {
+        _trayMenu = new WinForms.ContextMenuStrip();
+        var showItem = new WinForms.ToolStripMenuItem("显示主窗口");
+        showItem.Click += (_, _) => ShowMainWindow();
+        _trayMenu.Items.Add(showItem);
+
+        var profileItem = new WinForms.ToolStripMenuItem("场景");
+        _trayMenu.Items.Add(profileItem);
+        _trayMenu.Opening += (_, _) => RebuildProfileMenu(profileItem);
+
+        _trayMenu.Items.Add(new WinForms.ToolStripSeparator());
+        var exitItem = new WinForms.ToolStripMenuItem("退出");
+        exitItem.Click += (_, _) => ExitApplication();
+        _trayMenu.Items.Add(exitItem);
+
+        _tray = new WinForms.NotifyIcon
+        {
+            Icon = System.Drawing.SystemIcons.Application,
+            Text = "PerAppAudio 每应用音频路由",
+            Visible = true,
+            ContextMenuStrip = _trayMenu,
+        };
+        _tray.DoubleClick += (_, _) => ShowMainWindow();
+    }
+
+    private void RebuildProfileMenu(WinForms.ToolStripMenuItem profileItem)
+    {
+        profileItem.DropDownItems.Clear();
+        if (_host is null)
+        {
+            return;
+        }
+
+        profileItem.DropDownItems.Add("（rules.yaml 中无场景）").Enabled = false;
+        foreach (var profile in _host.Rules.Profiles)
+        {
+            var name = profile.Name;
+            var item = new WinForms.ToolStripMenuItem($"{name}（{profile.Rules.Count} 规则）");
+            item.Click += async (_, _) =>
+            {
+                try
+                {
+                    await _window!.ApplyProfileAsync(name, replace: true);
+                }
+                catch (Exception ex)
+                {
+                    _window!.AppendLog($"[场景] {name} 应用失败: {ex.Message}");
+                }
+            };
+            profileItem.DropDownItems.Add(item);
+        }
+    }
+
+    public void ExitApplication()
+    {
+        _window?.AllowClose();
+        Shutdown();
+    }
+
+    protected override void OnExit(ExitEventArgs e)
+    {
+        _tray?.Dispose();
+        _trayMenu?.Dispose();
+        _host?.Dispose();
+        base.OnExit(e);
+    }
+}

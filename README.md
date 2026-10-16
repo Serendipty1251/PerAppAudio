@@ -2,7 +2,7 @@
 
 让 Windows 上每个应用程序独立选择音频输出设备的开源工具——打破"所有声音只有一个默认输出"的系统限制。
 
-- 状态：**P2 调度层进行中**（2026-10-16；规则引擎 / 场景 Profile / A 路径音量守护已实测，WPF 壳待建）
+- 状态：**成品可交付**（2026-10-16；托盘壳 + 常驻协调上线，单文件 exe 已发布至 `dist/PerAppAudio/`）
 - 仓库：https://github.com/Serendipty1251/PerAppAudio
 - 平台：Windows 10 2004+ / 11（首版唯一平台；Linux / macOS 远期）
 - 协议：MIT
@@ -16,11 +16,11 @@
 
 | 手段 | 原理 | 延迟 | 驱动 |
 | --- | --- | --- | --- |
-| A 进程 Loopback 重定向 | 进程级 loopback 捕获 → 原会话静音 → 渲染到目标设备 | 30–60ms | 无 |
+| A 进程 Loopback 重定向 | 进程级 loopback 捕获（抑制原渲染）→ 渲染到目标设备 | 30–60ms | 无 |
 | B 默认端点引导 | 把应用的默认输出端点改为目标设备，应用直接播放 | <10ms | 无（B2 IPolicyConfig 主推，B1 注入默认关） |
 | C 虚拟声卡混音 | 多虚拟音频线 + 混音引擎分派 | <10ms | 需 EV 签名驱动（远期） |
 
-策略调度默认「自动」：优先 B，2 秒内未生效自动回退 A——产品在任何情况下不会缺声。
+策略调度默认「自动」= B2 持久化（管未来）+ A 实时迁移（管现在）并行双管齐下——产品在任何情况下不会缺声。
 
 ## 架构
 
@@ -90,7 +90,20 @@ dotnet run --project src/App.Cli -- test                                  # COM 
 3. **IsSystemSoundsSession 签名**：Win11 26200 实测带 `BOOL*` 出参（无参调用直接 AV），已按实测修正 COM 声明。
 4. **VoiceMeeter 设备 loopback 限制**：不镜像外来渲染流——`devlisten` 不能作为 A 链路在虚拟设备上的验收手段（音频确实已写入：实测 96 万帧、实时率 100.1%）。
 
-P2 剩余：WPF 托盘壳（主控制台 + 托盘快捷切换）、B2 路径音量替代方案、设备插拔实测。
+P2 剩余：B2 路径音量替代方案、设备插拔实测（WPF 壳与单文件发布已完成，见下）。
+
+## 成品使用（WPF 托盘壳 + 单文件 exe）
+
+```bash
+dotnet publish src/App.Wpf -c Release -r win-x64 --self-contained true \
+    -p:PublishSingleFile=true -p:EnableCompressionInSingleFile=true -o dist/PerAppAudio
+dotnet publish src/App.Cli -c Release -r win-x64 --self-contained true \
+    -p:PublishSingleFile=true -p:EnableCompressionInSingleFile=true -o dist/PerAppAudio
+```
+
+- 主程序 `PerAppAudio.exe`：单实例托盘常驻（AppHost：探测 + 看门狗 + 2s 扫描自动应用）；主窗口 = 路由表编辑（设备下拉 / 手段 / 音量滑条 / 移除）+ 活动链路 + 场景切换 + 日志；关窗即最小化到托盘。
+- 诊断 `PerAppAudio.Cli.exe`：devices / sessions / sessionvol / sessiondump / ctl / profile 全套命令。
+- 数据在 `%APPDATA%\PerAppAudio\`（routes.json / rules.yaml / app.log）。
 
 ## P1 控制闭环实测结果（2026-10-16，Win11 build 26200）
 

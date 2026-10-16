@@ -12,6 +12,13 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <AssemblyName>PerAppAudio</AssemblyName>
+    <RootNamespace>PerAppAudio.App.Wpf</RootNamespace>
+    <Version>0.3.0</Version>
+    <Product>PerAppAudio</Product>
+    <AssemblyTitle>PerAppAudio 每应用音频输出路由</AssemblyTitle>
   </PropertyGroup>
 
 </Project>

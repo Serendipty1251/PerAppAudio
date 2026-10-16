@@ -5,8 +5,99 @@
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         xmlns:local="clr-namespace:PerAppAudio.App.Wpf"
         mc:Ignorable="d"
-        Title="MainWindow" Height="450" Width="800">
-    <Grid>
+        Title="PerAppAudio — 每应用音频输出路由"
+        Height="600" Width="980"
+        Closing="Window_Closing">
+    <DockPanel Margin="10">
+        <!-- 顶部工具条 -->
+        <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="0,0,0,8">
+            <TextBlock Text="场景:" VerticalAlignment="Center"/>
+            <ComboBox x:Name="ProfileBox" Width="170" Margin="6,0,0,0"/>
+            <Button x:Name="ApplyProfileButton" Content="应用场景" Padding="12,3" Margin="6,0,0,0" Click="ApplyProfile_Click"/>
+            <TextBlock x:Name="ProbeText" VerticalAlignment="Center" Margin="16,0,0,0" Foreground="#616161" FontSize="12"/>
+        </StackPanel>
 
-    </Grid>
+        <!-- 底部状态 -->
+        <StatusBar DockPanel.Dock="Bottom">
+            <StatusBarItem>
+                <TextBlock x:Name="StatusText" Text="启动中…"/>
+            </StatusBarItem>
+        </StatusBar>
+
+        <Grid>
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="330"/>
+            </Grid.ColumnDefinitions>
+
+            <!-- 左：路由表 -->
+            <GroupBox Grid.Column="0" Header="路由表（持久化，应用启动即自动路由）">
+                <DockPanel>
+                    <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" Margin="0,6,0,0">
+                        <TextBlock Text="PID:" VerticalAlignment="Center"/>
+                        <TextBox x:Name="PidBox" Width="70" Margin="4,0,6,0"/>
+                        <ComboBox x:Name="AddDeviceBox" Width="180"/>
+                        <Button Content="添加路由" Padding="12,3" Margin="6,0,0,0" Click="AddRoute_Click"/>
+                    </StackPanel>
+                    <DataGrid x:Name="RouteGrid" AutoGenerateColumns="False" CanUserAddRows="False"
+                              HeadersVisibility="Column" IsReadOnly="False" SelectionMode="Single"
+                              RowHeight="30" FontSize="12">
+                        <DataGrid.Columns>
+                            <DataGridTextColumn Header="进程" Binding="{Binding ProcessName}" Width="140" IsReadOnly="True"/>
+                            <DataGridTemplateColumn Header="目标设备" Width="200">
+                                <DataGridTemplateColumn.CellTemplate>
+                                    <DataTemplate>
+                                        <ComboBox ItemsSource="{Binding DataContext.Devices, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                  SelectedItem="{Binding DeviceName, UpdateSourceTrigger=PropertyChanged}"
+                                                  SelectionChanged="Device_Changed" FontSize="12"/>
+                                    </DataTemplate>
+                                </DataGridTemplateColumn.CellTemplate>
+                            </DataGridTemplateColumn>
+                            <DataGridTemplateColumn Header="手段" Width="80">
+                                <DataGridTemplateColumn.CellTemplate>
+                                    <DataTemplate>
+                                        <ComboBox SelectedValue="{Binding Mode, UpdateSourceTrigger=PropertyChanged}"
+                                                  SelectedValuePath="Tag" SelectionChanged="Mode_Changed" FontSize="12">
+                                            <ComboBoxItem Content="自动" Tag="auto"/>
+                                            <ComboBoxItem Content="A 实时" Tag="a"/>
+                                            <ComboBoxItem Content="B 持久" Tag="b"/>
+                                        </ComboBox>
+                                    </DataTemplate>
+                                </DataGridTemplateColumn.CellTemplate>
+                            </DataGridTemplateColumn>
+                            <DataGridTemplateColumn Header="音量" Width="110">
+                                <DataGridTemplateColumn.CellTemplate>
+                                    <DataTemplate>
+                                        <Slider Minimum="0" Maximum="1" TickFrequency="0.1" IsSnapToTickEnabled="True"
+                                                Value="{Binding Volume, UpdateSourceTrigger=PropertyChanged}"
+                                                ValueChanged="Volume_Changed" Width="100" VerticalAlignment="Center"/>
+                                    </DataTemplate>
+                                </DataGridTemplateColumn.CellTemplate>
+                            </DataGridTemplateColumn>
+                            <DataGridTextColumn Header="状态" Binding="{Binding Status}" Width="90" IsReadOnly="True"/>
+                            <DataGridTemplateColumn Header="" Width="60">
+                                <DataGridTemplateColumn.CellTemplate>
+                                    <DataTemplate>
+                                        <Button Content="移除" Padding="6,0" Click="Remove_Click" FontSize="12"/>
+                                    </DataTemplate>
+                                </DataGridTemplateColumn.CellTemplate>
+                            </DataGridTemplateColumn>
+                        </DataGrid.Columns>
+                    </DataGrid>
+                </DockPanel>
+            </GroupBox>
+
+            <!-- 右：活动路由 + 日志 -->
+            <StackPanel Grid.Column="1" Margin="8,0,0,0">
+                <GroupBox Header="活动 A 链路（实时改道中）" Height="170">
+                    <ListBox x:Name="LiveBox" FontSize="12"/>
+                </GroupBox>
+                <GroupBox Header="日志" Margin="0,8,0,0">
+                    <TextBox x:Name="LogBox" IsReadOnly="True" TextWrapping="Wrap"
+                             VerticalScrollBarVisibility="Auto" FontFamily="Consolas" FontSize="11"
+                             Height="300"/>
+                </GroupBox>
+            </StackPanel>
+        </Grid>
+    </DockPanel>
 </Window>

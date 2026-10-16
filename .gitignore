@@ -12,3 +12,4 @@ publish/
 ## WorkBuddy local data
 .workbuddy/
 output/
+dist/
