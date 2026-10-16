@@ -1,8 +1,9 @@
-﻿using System.Diagnostics;
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 using PerAppAudio.RoutingEngine;
 using PerAppAudio.RoutingEngine.Audio;
 using PerAppAudio.RoutingEngine.Backends;
+using PerAppAudio.RuleEngine;
 using PerAppAudio.SessionManager;
 using PerAppAudio.WasapiInterop;
 
@@ -26,6 +27,7 @@ internal static class Program
                 "sessions" => ListSessions(args),
                 "route" => RunRoute(args),
                 "endpoint" => RunEndpoint(args),
+                "ctl" => RunCtl(args),
                 "devlisten" => RunDevListen(args),
                 "test" => RunInteropTest(),
                 "help" or "--help" or "-h" => Usage(),
@@ -54,10 +56,18 @@ internal static class Program
              endpoint clear --pid <PID>   手段B2：清除端点覆盖
              devlisten --device <ID|名称> [--ms <时长>]   监听设备播放能量（验证迁移用）
 
+             ctl add --pid <PID> --to <ID|名称> [--mode auto|a|b] [--volume 0-1]
+                                         P1 控制闭环：立即改道 + 写入持久路由表
+             ctl remove --pid <PID>       拆除路由 + 清 B2 覆盖 + 删持久记录
+             ctl list                     查看持久路由表与运行中匹配进程
+             ctl watch [--interval ms]    常驻协调：看门狗 + 新进程自动应用路由（Ctrl+C 退出）
+
             示例:
              devices
              route --pid 12345 --to "Realtek HD Audio 2nd output" --ms 30000
              endpoint set --pid 12345 --to "VoiceMeeter VAIO3"
+             ctl add --pid 12345 --to "VoiceMeeter VAIO3" --mode auto
+             ctl watch
             """);
         return 0;
     }
@@ -372,6 +382,301 @@ internal static class Program
         var (packets, framesCaptured, framesWritten, framesDropped, disc, silent, avgMs, maxMs) = stats.Value;
         Console.WriteLine($"[{elapsedMs / 1000,4}s] 包 {packets,6} | 采集 {framesCaptured,9} | 写入 {framesWritten,9} | 丢弃 {framesDropped,7} | 不连续 {disc,5} | 静音 {silent,5} | 处理 avg {avgMs:F3} max {maxMs:F3} ms");
     }
+
+    // ======================= P1 控制闭环（ctl） =======================
+
+    /// <summary>
+    /// P1 控制闭环 CLI：route add / remove / list / watch。
+    /// add = 协调器立即改道（Auto 双管齐下）+ 持久路由表；
+    /// watch = 常驻协调器（看门狗 + 对路由表中运行中的进程自动应用）。
+    /// </summary>
+    private static int RunCtl(string[] args)
+    {
+        var sub = args.Length > 1 ? args[1].ToLowerInvariant() : "list";
+        var store = new RouteStore().Load();
+
+        switch (sub)
+        {
+            case "add":
+                return CtlAdd(store, args);
+
+            case "remove":
+                return CtlRemove(store, args);
+
+            case "list":
+                return CtlList(store);
+
+            case "watch":
+                return CtlWatch(store, args);
+
+            default:
+                Console.Error.WriteLine($"未知子命令: {sub}（add / remove / list / watch）");
+                return 2;
+        }
+    }
+
+    private static int CtlAdd(RouteStore store, string[] args)
+    {
+        if (!int.TryParse(GetOption(args, "--pid"), out int pid) || pid <= 0)
+        {
+            Console.Error.WriteLine("缺少或非法的 --pid");
+            return 2;
+        }
+
+        var toArg = GetOption(args, "--to") ?? throw new InvalidOperationException("缺少 --to");
+        var device = DeviceManager.ResolveDevice(toArg);
+        var mode = ParseMode(GetOption(args, "--mode") ?? "auto");
+        float volume = float.TryParse(GetOption(args, "--volume"), out float v) ? Math.Clamp(v, 0f, 1f) : 1f;
+
+        string processPath = RouteStore.ResolveProcessPath(pid);
+        Console.WriteLine($"目标进程 : PID {pid}（{processPath}）");
+        Console.WriteLine($"目标设备 : {device.FriendlyName}");
+        Console.WriteLine($"手段     : {DescribeMode(mode)}");
+        Console.WriteLine();
+
+        using var coordinator = new RoutingCoordinator();
+        var (loopbackProbe, endpointProbe) = coordinator.ProbeAsync().GetAwaiter().GetResult();
+        Console.WriteLine($"[探测] 手段A: {(loopbackProbe.Available ? "可用" : "不可用")}（{loopbackProbe.Reason}）");
+        Console.WriteLine($"[探测] 手段B2: {(endpointProbe.Available ? "可用" : "不可用")}（{endpointProbe.Reason}）");
+
+        var command = new RoutingCommand(pid, processPath, new AudioDeviceRef(device.FriendlyName, device.Id), volume, false);
+        var report = coordinator.ApplyRouteAsync(command, mode).GetAwaiter().GetResult();
+
+        Console.WriteLine($"[B2 持久化] {(report.EndpointApplied ? "✅" : "❌")} {report.EndpointMessage}");
+        Console.WriteLine($"[A 实时迁移] {(report.LoopbackActive ? "✅" : "❌")} {report.LoopbackMessage}");
+        Console.WriteLine($"[总评] {(report.Success ? "成功" : "失败")}，耗时 {report.Elapsed.TotalMilliseconds:F0} ms");
+
+        store.Upsert(new StoredRoute
+        {
+            ProcessPath = processPath,
+            DeviceId = device.Id,
+            DeviceName = device.FriendlyName,
+            Mode = mode,
+            Volume = volume,
+        });
+        Console.WriteLine($"[持久化] 已写入路由表: {RouteStore.DefaultPath}");
+        Console.WriteLine("[说明] A 实时迁移链路随本命令退出而拆除（B2 注册表持久化保留）；常驻迁移请运行 ctl watch");
+
+        // add 是一次性命令：进程退出即拆（A 链路随本进程终止，B2 注册表持久化保留）
+        return report.Success ? 0 : 1;
+    }
+
+    private static int CtlRemove(RouteStore store, string[] args)
+    {
+        if (!int.TryParse(GetOption(args, "--pid"), out int pid) || pid <= 0)
+        {
+            Console.Error.WriteLine("缺少或非法的 --pid");
+            return 2;
+        }
+
+        string processPath = RouteStore.ResolveProcessPath(pid);
+        var stored = store.Routes.FirstOrDefault(r =>
+            string.Equals(r.ProcessPath, processPath, StringComparison.OrdinalIgnoreCase));
+
+        using var coordinator = new RoutingCoordinator();
+        var result = coordinator.RemoveRouteAsync(pid, clearEndpoint: true).GetAwaiter().GetResult();
+        Console.WriteLine($"[拆除] {(result.Success ? "成功" : "未命中")} {result.Message}");
+
+        bool removed = store.Remove(processPath);
+        if (stored is not null)
+        {
+            // 弱绑定（name.exe / pid:N）可能存的是别的键，兜底再删一次存储键
+            removed |= store.Remove(stored.ProcessPath);
+        }
+        Console.WriteLine($"[持久化] {(removed ? "已从路由表删除" : "路由表中无记录")}");
+        return 0;
+    }
+
+    private static int CtlList(RouteStore store)
+    {
+        var routes = store.Routes;
+        Console.WriteLine($"持久路由表: {RouteStore.DefaultPath}");
+        if (routes.Count == 0)
+        {
+            Console.WriteLine("  （空）");
+        }
+        else
+        {
+            Console.WriteLine($"{"进程",-32} {"目标设备",-28} {"手段",-8} {"音量",-5} 更新时间");
+            Console.WriteLine(new string('-', 108));
+            foreach (var r in routes)
+            {
+                Console.WriteLine(
+                    $"{Truncate(Path.GetFileName(r.ProcessPath), 30),-32} {Truncate(r.DeviceName, 26),-28} {DescribeMode(r.Mode),-8} {r.Volume,-5:F2} {r.UpdatedAt:yyyy-MM-dd HH:mm}");
+                Console.WriteLine($"    路径: {r.ProcessPath}");
+                Console.WriteLine($"    设备ID: {r.DeviceId}");
+            }
+        }
+
+        Console.WriteLine();
+        Console.WriteLine("运行中匹配进程:");
+        int matched = 0;
+        foreach (var r in routes)
+        {
+            foreach (var p in FindProcessesByPath(r.ProcessPath))
+            {
+                matched++;
+                Console.WriteLine($"  PID {p.Id,-6} ← {Path.GetFileName(r.ProcessPath)} → {r.DeviceName}");
+                p.Dispose();
+            }
+        }
+
+        if (matched == 0)
+        {
+            Console.WriteLine("  （无）");
+        }
+
+        return 0;
+    }
+
+    private static int CtlWatch(RouteStore store, string[] args)
+    {
+        int intervalMs = int.TryParse(GetOption(args, "--interval"), out int iv) ? Math.Clamp(iv, 500, 30_000) : 2000;
+
+        using var coordinator = new RoutingCoordinator();
+        var (loopbackProbe, endpointProbe) = coordinator.ProbeAsync().GetAwaiter().GetResult();
+        Console.WriteLine($"[探测] 手段A: {(loopbackProbe.Available ? "可用" : "不可用")} | 手段B2: {(endpointProbe.Available ? "可用" : "不可用")}");
+
+        coordinator.Log += msg => Console.WriteLine($"{DateTime.Now:HH:mm:ss} {msg}");
+        coordinator.StartWatchdog(intervalMs);
+        Console.WriteLine($"[看门狗] 已启动（{intervalMs} ms）：进程退出拆 A / 设备消失暂停 / 设备回归重挂");
+        Console.WriteLine("[常驻] Ctrl+C 退出（A 链路拆除恢复原状，B2 注册表持久化保留）");
+        Console.WriteLine();
+
+        var cts = new CancellationTokenSource();
+        Console.CancelKeyPress += (_, e) =>
+        {
+            e.Cancel = true;
+            cts.Cancel();
+        };
+
+        // 启动即扫一轮：路由表中正在运行的进程立即应用
+        ScanAndApply(coordinator, store);
+
+        while (!cts.IsCancellationRequested)
+        {
+            try
+            {
+                Task.Delay(intervalMs, cts.Token).Wait();
+            }
+            catch (AggregateException)
+            {
+                break;
+            }
+
+            if (cts.IsCancellationRequested)
+            {
+                break;
+            }
+
+            // 路由表可能被别的 ctl add/remove 改过，重载
+            store.Load();
+            ScanAndApply(coordinator, store);
+            PrintLiveRoutes(coordinator);
+        }
+
+        Console.WriteLine("[退出] 拆除全部 A 路由，恢复原会话…");
+        return 0;
+    }
+
+    /// <summary>对路由表中每个运行中的匹配进程应用路由（已应用的跳过）。</summary>
+    private static void ScanAndApply(RoutingCoordinator coordinator, RouteStore store)
+    {
+        var live = coordinator.GetLiveRoutes();
+        foreach (var route in store.Routes)
+        {
+            foreach (var process in FindProcessesByPath(route.ProcessPath))
+            {
+                using (process)
+                {
+                    if (live.Any(l => l.ProcessId == process.Id))
+                    {
+                        continue;
+                    }
+
+                    var device = new AudioDeviceRef(route.DeviceName, route.DeviceId);
+                    var command = new RoutingCommand(process.Id, route.ProcessPath, device, route.Volume, route.Mute);
+                    var report = coordinator.ApplyRouteAsync(command, route.Mode).GetAwaiter().GetResult();
+                    Console.WriteLine($"{DateTime.Now:HH:mm:ss} [应用] {Path.GetFileName(route.ProcessPath)}（PID {process.Id}）→ {route.DeviceName}" +
+                        $" | B2 {(report.EndpointApplied ? "✅" : "❌")} A {(report.LoopbackActive ? "✅" : "❌")}" +
+                        $" | {report.Elapsed.TotalMilliseconds:F0} ms");
+                    if (!report.Success)
+                    {
+                        Console.WriteLine($"    B2: {report.EndpointMessage}");
+                        Console.WriteLine($"    A : {report.LoopbackMessage}");
+                    }
+                }
+            }
+        }
+    }
+
+    private static void PrintLiveRoutes(RoutingCoordinator coordinator)
+    {
+        var routes = coordinator.GetLiveRoutes();
+        Console.WriteLine($"{DateTime.Now:HH:mm:ss} [状态] 活动路由 {routes.Count} 条");
+        foreach (var r in routes)
+        {
+            string flags = (r.LoopbackActive ? "A✅" : "A—") + " " + (r.EndpointApplied ? "B2✅" : "B2—") + (r.AwaitingDevice ? " ⏸设备" : "");
+            Console.WriteLine($"    PID {r.ProcessId,-6} {Truncate(Path.GetFileName(r.ProcessPath), 24),-24} → {Truncate(r.TargetDevice, 24),-24} [{flags}] {r.Mode}");
+        }
+    }
+
+    /// <summary>按存储的进程路径找运行中的进程（强绑定比对 MainModule；弱绑定按进程名）。调用方负责 Dispose。</summary>
+    private static List<Process> FindProcessesByPath(string processPath)
+    {
+        var matched = new List<Process>();
+        string fileName = Path.GetFileName(processPath);
+        if (string.IsNullOrEmpty(fileName))
+        {
+            return matched;
+        }
+
+        // 弱绑定（读不到 MainModule 时存的 "name.exe"）：按进程名匹配
+        bool weak = !Path.IsPathRooted(processPath);
+        string name = Path.GetFileNameWithoutExtension(fileName);
+
+        foreach (var process in Process.GetProcessesByName(name))
+        {
+            bool hit = weak;
+            if (!hit)
+            {
+                try
+                {
+                    hit = string.Equals(process.MainModule?.FileName, processPath, StringComparison.OrdinalIgnoreCase);
+                }
+                catch
+                {
+                    // MainModule 访问受限（提权/系统进程）→ 跳过，不误伤
+                }
+            }
+
+            if (hit)
+            {
+                matched.Add(process);
+            }
+            else
+            {
+                process.Dispose();
+            }
+        }
+
+        return matched;
+    }
+
+    private static RoutingMode ParseMode(string text) => text.ToLowerInvariant() switch
+    {
+        "a" or "loopback" => RoutingMode.Loopback,
+        "b" or "endpoint" => RoutingMode.Endpoint,
+        _ => RoutingMode.Auto,
+    };
+
+    private static string DescribeMode(RoutingMode mode) => mode switch
+    {
+        RoutingMode.Loopback => "A",
+        RoutingMode.Endpoint => "B",
+        RoutingMode.Auto => "auto",
+        _ => mode.ToString(),
+    };
 
     private static string GetDefaultDeviceId()
     {

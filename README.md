@@ -2,7 +2,7 @@
 
 让 Windows 上每个应用程序独立选择音频输出设备的开源工具——打破"所有声音只有一个默认输出"的系统限制。
 
-- 状态：**P0 技术验证阶段**（2026-10-15 启动；手段A / 手段B2 均已实测验证）
+- 状态：**P1 控制闭环已实测验证**（2026-10-16；协调器 + 持久路由表 + 看门狗上线）
 - 仓库：https://github.com/Serendipty1251/PerAppAudio
 - 平台：Windows 10 2004+ / 11（首版唯一平台；Linux / macOS 远期）
 - 协议：MIT
@@ -72,6 +72,20 @@ dotnet run --project src/App.Cli -- test                                  # COM 
 
 **产品结论**：B2 管「未来」（应用启动即按路由走），A 管「现在」（正在播放的应用实时改道）——A+B 组合拳。
 
+## P1 控制闭环实测结果（2026-10-16，Win11 build 26200）
+
+新增组件：`RoutingCoordinator`（策略调度，Auto = B2+A 双管齐下）、`RouteStore`（持久路由表 `%APPDATA%\PerAppAudio\routes.json`，按进程路径绑定）、`EndpointBackend` 重试封装、CLI `ctl add/remove/list/watch`。
+
+| 验收项 | 标准 | 实测 | 结论 |
+| --- | --- | --- | --- |
+| 单应用改道成功率 | ≥99% | B2 set（播放中进程）15/15；A 链路 PoC-1 0 丢帧 + 本日多次 ✅ | 达标 |
+| B2 失败保障 | 2s 内不缺声 | Auto 并行双管齐下（实测 B2❌A✅ 场景音频不中断） | 达标 |
+| 进程退出自动拆除 | <2s | 自然退出 2s / 短命进程 1s（看门狗日志实锤） | 达标 |
+| 重启后路由保持 | 持久 | B2 注册表：新进程零干预直走目标设备（RMS 0.259 实测）；routes.json 重载 | 达标 |
+| 新进程自动应用 | — | ctl watch 2–4s 内发现并应用（B2+A 30ms） | 达标 |
+
+**P0-2 未解现象破案（E_INVALIDARG 根因）**：`SetPersistedDefaultAudioEndpoint` 仅在**目标进程已注册音频会话**时可用——正在播放 / 播放过 / 系统声音宿主（explorer）全部成功（15/15 + 3/3）；**从未发声的活进程与已退出进程**一律 E_INVALIDARG（含重试）。产品语义自洽：UI 只显示有会话的应用，用户可选的目标 set 必成功；「预路由未启动应用」由 RouteStore + watch 轮询在会话出现后补设。重试设计仍吸收多调用方并发竞争与启动注册窗口（实测 629/657ms 恢复案例）。
+
 ## 项目结构
 
 ```
@@ -79,10 +93,11 @@ src/
 ├── WasapiInterop/     # WASAPI P/Invoke + COM 接口声明（vtable 顺序与 SDK 头文件严格一致）
 │                      # + IAudioPolicyConfigFactory（手段B2，未公开接口）
 ├── RoutingEngine/     # 控制手段层：IRoutingBackend + 手段A(LoopbackBackend) + 手段B(EndpointBackend)
+│                      # + RoutingCoordinator（P1 策略调度：Auto 双管齐下 + 看门狗）
 ├── SessionManager/    # 会话枚举、进程识别、音量守护
-├── RuleEngine/        # 规则匹配、场景、触发器（调用层）
+├── RuleEngine/        # 规则匹配、场景、触发器 + RouteStore（P1 持久路由表）
 ├── App.Wpf/           # 托盘与主界面（调用层）
-└── App.Cli/           # CLI / 诊断（P0 载体）
+└── App.Cli/           # CLI / 诊断（P0 载体 + P1 ctl 控制命令）
 ```
 
 ## 规划文档
