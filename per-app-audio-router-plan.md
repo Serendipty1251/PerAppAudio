@@ -268,7 +268,7 @@ profiles:
 | P0 手段验证 | 1–2 周 | 三种手段的控制能力实测 | 《控制手段可行性报告》：A 延迟 < 60ms、CPU < 3%、无爆音；B 至少一种子方案在 ≥ 2 个系统版本生效且 < 10ms；控制能力矩阵填写完毕 |
 | P1 控制闭环 | 3–4 周 | 最小可用走向控制：指定应用 → 指定设备、可动态改道、策略调度与自动回退 | 单应用改道成功率 ≥ 99%；B 失败 2s 内回退 A；UI 仅保留必要控件 |
 | ~~P1 控制闭环~~ | **已完成（2026-10-16）** | RoutingCoordinator（Auto=B2+A 并行）+ RouteStore 持久表 + 看门狗 + ctl CLI | **实测达标**：B2 set 15/15（播放中）；Auto 并行无串行回退延迟（B2❌A✅ 音频不中断）；进程退出拆除 1–2s；重启路由保持（注册表+routes.json）；新进程 2–4s 自动应用；**E_INVALIDARG 破案**（见 §12 P0-2 定论） |
-| P2 调度层 | 2–3 周 | 规则、场景 Profile、触发器、CLI | 一键切换 200ms 内生效 |
+| P2 调度层 | 2–3 周 | 规则、场景 Profile、触发器、CLI；**进行中（2026-10-16）**：规则引擎/Profile/A 路径音量/诊断 CLI 已实测（切换 167ms 达标，见 §12.2），WPF 壳与 B2 音量待做 | 一键切换 200ms 内生效（**已达标 167ms**） |
 | P3 发布 | 2 周 | Authenticode 签名、MSIX、winget、文档、CI | 全新 Win11 安装即用 |
 | P4 远期 | 待定 | 手段C、Linux (PipeWire) / macOS、插件化 | — |
 
@@ -376,5 +376,26 @@ per-app-audio/
 - 目标设备消失/回归的重挂逻辑已实现（看门狗分支）但未实测（需物理插拔设备场景）；
 - 「无会话活进程」的 B2 清除同样被拒——孤儿注册表覆盖需直写注册表兜底（罕见边界：应用被路由后从未再发声即被清除）；
 - 音量/静音字段已入 RouteStore 但未应用到目标设备会话（P2 音量守护）。
+
+### 12.2 P2 调度层实测记录（2026-10-16，Win11 build 26200）
+
+新增组件：`RuleSet`（rules.yaml 最小 YAML 子集解析器，零依赖）、`ProfileService` + `ProcessFinder`、`WasapiSessionSource.ApplySessionControl / GetSessionVolumeStates`、`WasapiRenderer.SetSessionVolume / GetSessionVolume`、CLI `profile list/apply/current` + `sessionvol` + `sessiondump`。
+
+| 验收项 | 标准 | 实测 | 结论 |
+| --- | --- | --- | --- |
+| Profile 一键切换 | <200ms | `profile apply --replace` **167 ms**（单规则含 B2 set + A 启动） | ✅ |
+| A 路径独立音量 | 音量生效 | `--volume 0.30` → 渲染会话读回 **0.30**（GetService(ISimpleAudioVolume) 闭环） | ✅ |
+| 规则引擎 | YAML 规则 | rules.yaml 双 Profile 解析正确；store 键规范化（运行中进程→完整路径） | ✅ |
+| 音量守护（看门狗 2s 重设） | 会话重建后保持 | 逻辑已实现；受会话枚举盲区限制（见下） | ⚠️ 部分 |
+
+**平台级发现（sessiondump 逐方法 HRESULT 诊断定论）**：
+
+1. **会话枚举盲区**：`IAudioSessionEnumerator` 看不到活跃 winmm 会话——枚举结果全是死进程残留会话（pid=0、identifier 空、Inactive）。含义：按 PID 找会话的静音/音量守护对 winmm 类应用不可用；B2 路径音量需替代方案（P3：IAudioSessionNotification 事件驱动或混合器接口）。
+2. **无双重播放（重要正名）**：A 改道期间原设备实测**静默**（进程 loopback Include 模式激活即抑制目标进程的原渲染）——静音守护（MuteProcessSessions）从 PoC-1 起就是 no-op，但**从来不需要**；手段A 无双重播放，PoC-1 验收结论成立（机制描述修正：原输出抑制来自 loopback 激活本身，非会话静音）。
+3. **IsSystemSoundsSession 真实签名带 `BOOL*` 出参**：无参调用直接 AccessViolation（Win11 26200 实测），已修正 COM 声明（bool retval 形态）。NAudio 的无参 [PreserveSig] 形态在本机不可用。
+4. **VoiceMeeter 虚拟设备 loopback 不镜像外来渲染流**：A 链路向 Aux 写入 96 万帧（实时率 100.1%）但 `devlisten`（设备级 loopback）测到静默；同设备上原生 winmm 会话的声音可测。devlisten 不能作为 A 链路在 VoiceMeeter 设备上的验收手段。
+5. **profile apply 语义修正**：规则意图无条件写入 RouteStore（原实现命中 0 进程时不写库导致 watch 读到旧值）。
+
+**P2 剩余**：WPF 托盘壳（主控制台 + 托盘）、B2 路径音量替代方案、设备插拔路由实测。
 
 延迟测量方法：播放已知脉冲信号，录制目标设备输出，比对波形时间差；CPU 用 PerformanceCounter 采样。

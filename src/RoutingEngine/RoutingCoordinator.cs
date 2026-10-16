@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using PerAppAudio.RoutingEngine.Backends;
+using PerAppAudio.SessionManager;
 using PerAppAudio.WasapiInterop;
 
 namespace PerAppAudio.RoutingEngine;
@@ -128,6 +129,25 @@ public sealed class RoutingCoordinator : IDisposable
             };
         }
 
+        // P2 音量守护：B2 路径应用直接在目标设备出声，对其会话施加音量 / 静音
+        // （A 路径的音量在 LoopbackBackend 内设置渲染会话；此处对原会话无害——已被静音守护管理）
+        if ((endpointApplied || loopbackActive) && (command.Volume < 1f || command.Mute))
+        {
+            try
+            {
+                int affected = WasapiSessionSource.ApplySessionControl(
+                    command.ProcessId,
+                    volume: command.Volume < 1f ? command.Volume : null,
+                    mute: command.Mute ? true : null,
+                    deviceId: command.TargetDevice.DeviceId);
+                Log?.Invoke($"[音量守护] 首次施加：PID {command.ProcessId} vol {command.Volume:F2} → 命中 {affected} 个会话（目标设备 {command.TargetDevice.FriendlyName}）");
+            }
+            catch
+            {
+                // 音量守护失败不阻断路由主链路
+            }
+        }
+
         return report;
     }
 
@@ -243,6 +263,23 @@ public sealed class RoutingCoordinator : IDisposable
                     if (!r.Success)
                     {
                         Log?.Invoke($"[看门狗] 重挂失败: {r.Message}");
+                    }
+                }
+
+                // 4. P2 音量守护：应用可能重建音频会话，周期性重设音量 / 静音
+                if (route.Command.Volume < 1f || route.Command.Mute)
+                {
+                    try
+                    {
+                        WasapiSessionSource.ApplySessionControl(
+                            pid,
+                            volume: route.Command.Volume < 1f ? route.Command.Volume : null,
+                            mute: route.Command.Mute ? true : null,
+                            deviceId: route.Command.TargetDevice.DeviceId);
+                    }
+                    catch
+                    {
+                        // 守护失败下一轮再来
                     }
                 }
             }

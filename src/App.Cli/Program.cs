@@ -25,9 +25,12 @@ internal static class Program
             {
                 "devices" => ListDevices(),
                 "sessions" => ListSessions(args),
+                "sessionvol" => RunSessionVol(args),
+                "sessiondump" => RunSessionDump(args),
                 "route" => RunRoute(args),
                 "endpoint" => RunEndpoint(args),
                 "ctl" => RunCtl(args),
+                "profile" => RunProfile(args),
                 "devlisten" => RunDevListen(args),
                 "test" => RunInteropTest(),
                 "help" or "--help" or "-h" => Usage(),
@@ -62,11 +65,17 @@ internal static class Program
              ctl list                     查看持久路由表与运行中匹配进程
              ctl watch [--interval ms]    常驻协调：看门狗 + 新进程自动应用路由（Ctrl+C 退出）
 
+             profile list                        列出 rules.yaml 中的场景
+             profile apply --name <名> [--replace] [--dry-run]
+                                                 一键切换场景（replace=拆除旧场景不覆盖的路由）
+             profile current                     当前持久路由表（等效 ctl list）
+
             示例:
              devices
              route --pid 12345 --to "Realtek HD Audio 2nd output" --ms 30000
              endpoint set --pid 12345 --to "VoiceMeeter VAIO3"
-             ctl add --pid 12345 --to "VoiceMeeter VAIO3" --mode auto
+             ctl add --pid 12345 --to "VoiceMeeter VAIO3" --mode auto --volume 0.5
+             profile apply --name game --replace
              ctl watch
             """);
         return 0;
@@ -246,6 +255,96 @@ internal static class Program
         void GetState(out DeviceState state);
     }
 
+    /// <summary>会话接口原始诊断：逐方法打印 HRESULT 与返回值，用于 vtable 槽位排错。</summary>
+    private static int RunSessionDump(string[] args)
+    {
+        string? deviceArg = GetOption(args, "--device");
+        var device = deviceArg is null
+            ? DeviceManager.ResolveDevice(GetDefaultDeviceId())
+            : DeviceManager.ResolveDevice(deviceArg);
+
+        Console.WriteLine($"设备: {device.FriendlyName}");
+        const int ClsctxAll = 0x17;
+        var iid = Guid.Parse(Guids.IID_IAudioSessionManager2);
+        var dev = DeviceManager.GetDevice(device.Id);
+        dev.Activate(ref iid, ClsctxAll, IntPtr.Zero, out object mgr);
+        var manager = (IAudioSessionManager2)mgr;
+        manager.GetSessionEnumerator(out var enumerator);
+
+        int count = enumerator.GetCount();
+        Console.WriteLine($"会话数: {count}");
+        for (int i = 0; i < count; i++)
+        {
+            Console.WriteLine($"--- 会话[{i}]");
+            var control = enumerator.GetSession(i);
+
+            try { Console.WriteLine($"  GetState()           = {control.GetState()}"); }
+            catch (Exception ex) { Console.WriteLine($"  GetState()           抛 0x{ex.HResult:X8} {ex.Message}"); }
+
+            try { Console.WriteLine($"  GetDisplayName()     = {control.GetDisplayName()}"); }
+            catch (Exception ex) { Console.WriteLine($"  GetDisplayName()     抛 0x{ex.HResult:X8} {ex.Message}"); }
+
+            var control2 = (IAudioSessionControl2)control;
+
+            try
+            {
+                int hr = control2.GetSessionIdentifier(out IntPtr p1);
+                string s1 = p1 == IntPtr.Zero ? "(null)" : (Marshal.PtrToStringUni(p1) ?? "(empty)");
+                Console.WriteLine($"  GetSessionIdentifier hr=0x{hr:X8} → {s1}");
+                if (p1 != IntPtr.Zero) Marshal.FreeCoTaskMem(p1);
+            }
+            catch (Exception ex) { Console.WriteLine($"  GetSessionIdentifier 抛 0x{ex.HResult:X8} {ex.Message}"); }
+
+            try
+            {
+                int hr = control2.GetSessionInstanceIdentifier(out IntPtr p2);
+                string s2 = p2 == IntPtr.Zero ? "(null)" : (Marshal.PtrToStringUni(p2) ?? "(empty)");
+                Console.WriteLine($"  GetSessionInstanceId hr=0x{hr:X8} → {s2}");
+                if (p2 != IntPtr.Zero) Marshal.FreeCoTaskMem(p2);
+            }
+            catch (Exception ex) { Console.WriteLine($"  GetSessionInstanceId 抛 0x{ex.HResult:X8} {ex.Message}"); }
+
+            try
+            {
+                int hr = control2.GetProcessId(out int pid);
+                Console.WriteLine($"  GetProcessId         hr=0x{hr:X8} → {pid}");
+            }
+            catch (Exception ex) { Console.WriteLine($"  GetProcessId         抛 0x{ex.HResult:X8} {ex.Message}"); }
+
+            try
+            {
+                bool sys = control2.IsSystemSoundsSession();
+                Console.WriteLine($"  IsSystemSoundsSession → {sys}");
+            }
+            catch (Exception ex) { Console.WriteLine($"  IsSystemSoundsSession 抛 0x{ex.HResult:X8} {ex.Message}"); }
+        }
+        return 0;
+    }
+
+    /// <summary>读回指定进程在所有设备上的会话音量 / 静音状态（P2 音量守护诊断）。</summary>
+    private static int RunSessionVol(string[] args)
+    {
+        if (!int.TryParse(GetOption(args, "--pid"), out int pid) || pid <= 0)
+        {
+            Console.Error.WriteLine("缺少或非法的 --pid");
+            return 2;
+        }
+
+        var states = WasapiSessionSource.GetSessionVolumeStates(pid);
+        if (states.Count == 0)
+        {
+            Console.WriteLine($"PID {pid} 在任何渲染设备上都没有音频会话");
+            return 0;
+        }
+
+        foreach (var s in states)
+        {
+            Console.WriteLine($"设备 {s.Device}");
+            Console.WriteLine($"  会话 {Truncate(s.DisplayName, 40)} | 音量 {s.Volume:F2} | 静音 {(s.Muted ? "是" : "否")}");
+        }
+        return 0;
+    }
+
     private static int ListDevices()
     {
         var devices = DeviceManager.EnumerateRenderDevices();
@@ -383,6 +482,78 @@ internal static class Program
         Console.WriteLine($"[{elapsedMs / 1000,4}s] 包 {packets,6} | 采集 {framesCaptured,9} | 写入 {framesWritten,9} | 丢弃 {framesDropped,7} | 不连续 {disc,5} | 静音 {silent,5} | 处理 avg {avgMs:F3} max {maxMs:F3} ms");
     }
 
+    // ======================= P2 场景 Profile（profile） =======================
+
+    /// <summary>
+    /// P2 场景 Profile CLI：profile list / apply / current。
+    /// rules.yaml 位于 %APPDATA%\PerAppAudio\rules.yaml；apply 把场景实例化进 RouteStore 并立即路由。
+    /// </summary>
+    private static int RunProfile(string[] args)
+    {
+        var sub = args.Length > 1 ? args[1].ToLowerInvariant() : "list";
+        var store = new RouteStore().Load();
+        var rules = RuleSet.Load();
+
+        switch (sub)
+        {
+            case "list":
+            {
+                Console.WriteLine($"规则文件: {RuleSet.DefaultPath}");
+                if (rules.Profiles.Count == 0)
+                {
+                    Console.WriteLine("  （空——创建示例：见上方 Usage 的 yaml 结构）");
+                    return 0;
+                }
+                foreach (var (name, description, count) in new ProfileService(store, rules).List())
+                {
+                    Console.WriteLine($"  {name,-16} {count} 条规则  {description}");
+                }
+                return 0;
+            }
+
+            case "apply":
+            {
+                var name = GetOption(args, "--name") ?? throw new InvalidOperationException("缺少 --name");
+                bool replace = args.Contains("--replace", StringComparer.OrdinalIgnoreCase);
+                bool dryRun = args.Contains("--dry-run", StringComparer.OrdinalIgnoreCase);
+
+                using var coordinator = new RoutingCoordinator();
+                var probes = coordinator.ProbeAsync().GetAwaiter().GetResult();
+                Console.WriteLine($"[探测] 手段A: {(probes.Loopback.Available ? "可用" : "不可用")} | 手段B2: {(probes.Endpoint.Available ? "可用" : "不可用")}");
+
+                try
+                {
+                    var report = new ProfileService(store, rules)
+                        .ApplyAsync(coordinator, name, replace, dryRun)
+                        .GetAwaiter().GetResult();
+
+                    Console.WriteLine($"[切换] Profile「{report.ProfileName}」：命中 {report.MatchedProcesses} 进程，应用 {report.AppliedRoutes.Count} 条路由，耗时 {report.Elapsed.TotalMilliseconds:F0} ms");
+                    foreach (var line in report.AppliedRoutes)
+                    {
+                        Console.WriteLine($"  {line}");
+                    }
+                    if (report.MatchedProcesses == 0)
+                    {
+                        Console.WriteLine("  （没有运行中的匹配进程——规则已就绪，进程启动后由 ctl watch 接管）");
+                    }
+                    return 0;
+                }
+                catch (InvalidOperationException ex)
+                {
+                    Console.Error.WriteLine(ex.Message);
+                    return 1;
+                }
+            }
+
+            case "current":
+                return CtlList(store);
+
+            default:
+                Console.Error.WriteLine($"未知子命令: {sub}（list / apply / current）");
+                return 2;
+        }
+    }
+
     // ======================= P1 控制闭环（ctl） =======================
 
     /// <summary>
@@ -513,7 +684,7 @@ internal static class Program
         int matched = 0;
         foreach (var r in routes)
         {
-            foreach (var p in FindProcessesByPath(r.ProcessPath))
+            foreach (var p in ProcessFinder.Find(r.ProcessPath))
             {
                 matched++;
                 Console.WriteLine($"  PID {p.Id,-6} ← {Path.GetFileName(r.ProcessPath)} → {r.DeviceName}");
@@ -585,7 +756,7 @@ internal static class Program
         var live = coordinator.GetLiveRoutes();
         foreach (var route in store.Routes)
         {
-            foreach (var process in FindProcessesByPath(route.ProcessPath))
+            foreach (var process in ProcessFinder.Find(route.ProcessPath))
             {
                 using (process)
                 {
@@ -619,48 +790,6 @@ internal static class Program
             string flags = (r.LoopbackActive ? "A✅" : "A—") + " " + (r.EndpointApplied ? "B2✅" : "B2—") + (r.AwaitingDevice ? " ⏸设备" : "");
             Console.WriteLine($"    PID {r.ProcessId,-6} {Truncate(Path.GetFileName(r.ProcessPath), 24),-24} → {Truncate(r.TargetDevice, 24),-24} [{flags}] {r.Mode}");
         }
-    }
-
-    /// <summary>按存储的进程路径找运行中的进程（强绑定比对 MainModule；弱绑定按进程名）。调用方负责 Dispose。</summary>
-    private static List<Process> FindProcessesByPath(string processPath)
-    {
-        var matched = new List<Process>();
-        string fileName = Path.GetFileName(processPath);
-        if (string.IsNullOrEmpty(fileName))
-        {
-            return matched;
-        }
-
-        // 弱绑定（读不到 MainModule 时存的 "name.exe"）：按进程名匹配
-        bool weak = !Path.IsPathRooted(processPath);
-        string name = Path.GetFileNameWithoutExtension(fileName);
-
-        foreach (var process in Process.GetProcessesByName(name))
-        {
-            bool hit = weak;
-            if (!hit)
-            {
-                try
-                {
-                    hit = string.Equals(process.MainModule?.FileName, processPath, StringComparison.OrdinalIgnoreCase);
-                }
-                catch
-                {
-                    // MainModule 访问受限（提权/系统进程）→ 跳过，不误伤
-                }
-            }
-
-            if (hit)
-            {
-                matched.Add(process);
-            }
-            else
-            {
-                process.Dispose();
-            }
-        }
-
-        return matched;
     }
 
     private static RoutingMode ParseMode(string text) => text.ToLowerInvariant() switch

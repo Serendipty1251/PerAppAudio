@@ -46,16 +46,16 @@ public interface IAudioSessionControl
     [return: MarshalAs(UnmanagedType.LPWStr)]
     string GetDisplayName();
 
-    void SetDisplayName([MarshalAs(UnmanagedType.LPWStr)] string Value);
+    void SetDisplayName([MarshalAs(UnmanagedType.LPWStr)] string Value, ref Guid EventContext);
 
     [return: MarshalAs(UnmanagedType.LPWStr)]
     string GetIconPath();
 
-    void SetIconPath([MarshalAs(UnmanagedType.LPWStr)] string Value);
+    void SetIconPath([MarshalAs(UnmanagedType.LPWStr)] string Value, ref Guid EventContext);
 
     void GetGroupingParam(out Guid pRetVal);
 
-    void SetGroupingParam(ref Guid Override, [In] ref Guid EventContext);
+    void SetGroupingParam(ref Guid Override, ref Guid EventContext);
 
     void RegisterAudioSessionNotification(IAudioSessionEvents NewNotifications);
 
@@ -63,20 +63,27 @@ public interface IAudioSessionControl
 }
 
 // vtable = IAudioSessionControl 全部方法 + 下列 5 个方法；不得重新声明基接口方法。
+// Win11 26200 实测（sessiondump，2026-10-16）：IsSystemSoundsSession 带 BOOL* 出参
+// （无参调用直接 AccessViolation），因此用 bool retval 形态（隐藏 BOOL* 指针）签名才正确。
+// GetSessionIdentifier / GetSessionInstanceIdentifier 返回 LPWSTR（调用方 CoTaskMemFree）。
 [ComImport]
 [Guid(Guids.IID_IAudioSessionControl2)]
 [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
 public interface IAudioSessionControl2 : IAudioSessionControl
 {
-    Guid GetSessionIdentifier();
+    [PreserveSig]
+    int GetSessionIdentifier(out IntPtr pRetVal);
 
-    Guid GetSessionInstanceIdentifier();
+    [PreserveSig]
+    int GetSessionInstanceIdentifier(out IntPtr pRetVal);
 
-    int GetProcessId();
+    [PreserveSig]
+    int GetProcessId(out int processId);
 
     bool IsSystemSoundsSession();
 
-    void SetDuckingPreference(bool optOut);
+    [PreserveSig]
+    int SetDuckingPreference(bool optOut);
 }
 
 /// <summary>IAudioSessionEvents（P0-1 仅占位，P1 实现事件监听）。</summary>

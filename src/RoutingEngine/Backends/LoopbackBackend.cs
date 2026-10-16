@@ -111,9 +111,26 @@ public sealed class LoopbackBackend : IRoutingBackend
             // 首轮立即静音，避免启动瞬间的双重播放
             WasapiSessionSource.MuteProcessSessions(pid, mute: true);
 
+            // P2 音量守护：渲染会话音量（手段A 的目标设备独立音量）
+            float? appliedVolume = null;
+            if (command.Volume is >= 0f and < 1f)
+            {
+                try
+                {
+                    renderer.SetSessionVolume(command.Volume);
+                    appliedVolume = renderer.GetSessionVolume(); // 读回闭环验证
+                }
+                catch (Exception ex)
+                {
+                    // 音量设置失败不阻断主链路，但留诊断痕迹
+                    Console.Error.WriteLine($"[LoopbackBackend] 渲染会话音量设置失败: 0x{ex.HResult:X8} {ex.Message}");
+                }
+            }
+
             return RoutingResult.Ok(RoutingMode.Loopback) with
             {
-                Message = $"格式 {formatDesc}；采集缓冲 {capture.BufferFrames} 帧；渲染缓冲 {renderer.BufferFrames} 帧",
+                Message = $"格式 {formatDesc}；采集缓冲 {capture.BufferFrames} 帧；渲染缓冲 {renderer.BufferFrames} 帧" +
+                    (appliedVolume.HasValue ? $"；渲染会话音量 {appliedVolume.Value:F2}" : string.Empty),
             };
         }
         catch (Exception ex)

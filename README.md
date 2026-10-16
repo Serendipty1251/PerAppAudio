@@ -2,7 +2,7 @@
 
 让 Windows 上每个应用程序独立选择音频输出设备的开源工具——打破"所有声音只有一个默认输出"的系统限制。
 
-- 状态：**P1 控制闭环已实测验证**（2026-10-16；协调器 + 持久路由表 + 看门狗上线）
+- 状态：**P2 调度层进行中**（2026-10-16；规则引擎 / 场景 Profile / A 路径音量守护已实测，WPF 壳待建）
 - 仓库：https://github.com/Serendipty1251/PerAppAudio
 - 平台：Windows 10 2004+ / 11（首版唯一平台；Linux / macOS 远期）
 - 协议：MIT
@@ -72,6 +72,26 @@ dotnet run --project src/App.Cli -- test                                  # COM 
 
 **产品结论**：B2 管「未来」（应用启动即按路由走），A 管「现在」（正在播放的应用实时改道）——A+B 组合拳。
 
+## P2 调度层进展（2026-10-16，Win11 build 26200）
+
+已落地并实测：
+
+| 能力 | 实测 | 结论 |
+| --- | --- | --- |
+| 场景 Profile 一键切换 | `profile apply --replace` 167 ms（标准 <200 ms） | 达标 |
+| A 路径独立音量 | `--volume 0.30` → 渲染会话读回 0.30（GetService(ISimpleAudioVolume) 闭环） | 达标 |
+| 规则引擎 | `rules.yaml` 多 Profile（最小 YAML 子集自实现解析器，零依赖）+ ProcessFinder | 可用 |
+| CLI | `profile list/apply/current` + 诊断命令 `sessionvol` / `sessiondump` | 可用 |
+
+**平台级发现（重要，实测定论）**：
+
+1. **会话枚举盲区**：`IAudioSessionEnumerator` 在本机看不到活跃 winmm 会话（仅返回死进程残留会话）——按 PID 找会话的静音 / 音量守护对 winmm 类应用不可用；B2 路径音量需替代方案（P3）。
+2. **无双重播放**：进程 loopback（Include 模式）本身抑制目标进程的原渲染（A 改道中原设备实测静默）——静音守护实为冗余保险；PoC-1 结论经机制修正后依然成立。
+3. **IsSystemSoundsSession 签名**：Win11 26200 实测带 `BOOL*` 出参（无参调用直接 AV），已按实测修正 COM 声明。
+4. **VoiceMeeter 设备 loopback 限制**：不镜像外来渲染流——`devlisten` 不能作为 A 链路在虚拟设备上的验收手段（音频确实已写入：实测 96 万帧、实时率 100.1%）。
+
+P2 剩余：WPF 托盘壳（主控制台 + 托盘快捷切换）、B2 路径音量替代方案、设备插拔实测。
+
 ## P1 控制闭环实测结果（2026-10-16，Win11 build 26200）
 
 新增组件：`RoutingCoordinator`（策略调度，Auto = B2+A 双管齐下）、`RouteStore`（持久路由表 `%APPDATA%\PerAppAudio\routes.json`，按进程路径绑定）、`EndpointBackend` 重试封装、CLI `ctl add/remove/list/watch`。
@@ -94,10 +114,10 @@ src/
 │                      # + IAudioPolicyConfigFactory（手段B2，未公开接口）
 ├── RoutingEngine/     # 控制手段层：IRoutingBackend + 手段A(LoopbackBackend) + 手段B(EndpointBackend)
 │                      # + RoutingCoordinator（P1 策略调度：Auto 双管齐下 + 看门狗）
-├── SessionManager/    # 会话枚举、进程识别、音量守护
-├── RuleEngine/        # 规则匹配、场景、触发器 + RouteStore（P1 持久路由表）
-├── App.Wpf/           # 托盘与主界面（调用层）
-└── App.Cli/           # CLI / 诊断（P0 载体 + P1 ctl 控制命令）
+├── SessionManager/    # 会话枚举、进程识别、音量守护（含 GetSessionVolumeStates 诊断）
+├── RuleEngine/        # RuleSet（rules.yaml 解析）+ ProfileService + RouteStore + ProcessFinder
+├── App.Wpf/           # 托盘与主界面（调用层，P2 待建）
+└── App.Cli/           # CLI / 诊断（ctl + profile + sessionvol/sessiondump）
 ```
 
 ## 规划文档

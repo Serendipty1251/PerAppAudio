@@ -71,6 +71,27 @@ public sealed class WasapiRenderer : IDisposable
     public int GetFreeFrames() => BufferFrames - _client.GetCurrentPadding();
 
     /// <summary>
+    /// 设置本渲染流会话的音量（P2 音量守护：手段A 的目标设备独立音量）。
+    /// 走 IAudioClient.GetService(ISimpleAudioVolume)，作用于本进程的渲染会话。
+    /// </summary>
+    public void SetSessionVolume(float level)
+    {
+        var simple = GetSessionVolumeInterface();
+        var eventContext = Guid.Empty;
+        simple.SetMasterVolume(Math.Clamp(level, 0f, 1f), ref eventContext);
+    }
+
+    /// <summary>读回本渲染流会话音量（A 路径音量闭环验证用）。</summary>
+    public float GetSessionVolume() => GetSessionVolumeInterface().GetMasterVolume();
+
+    private ISimpleAudioVolume GetSessionVolumeInterface()
+    {
+        var iid = Guid.Parse(Guids.IID_ISimpleAudioVolume);
+        _client.GetService(ref iid, out object service);
+        return (ISimpleAudioVolume)service;
+    }
+
+    /// <summary>
     /// 写入一包音频（格式须与 Format 一致）。返回实际写入帧数；
     /// 缓冲区满时丢弃多余帧（PoC 计数为 dropped，P1 换环形队列）。
     /// </summary>
