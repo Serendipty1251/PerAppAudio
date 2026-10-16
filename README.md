@@ -5,6 +5,7 @@
 - 状态：**成品可交付**（2026-10-16；托盘壳 + 常驻协调上线，单文件 exe 已发布至 `dist/PerAppAudio/`）
 - 仓库：https://github.com/Serendipty1251/PerAppAudio
 - 平台：Windows 10 2004+ / 11（首版唯一平台；Linux / macOS 远期）
+- **下载**：[GitHub Releases → v0.4.0](https://github.com/Serendipty1251/PerAppAudio/releases/tag/v0.4.0)（`PerAppAudio.exe` 单文件，免安装）
 - 协议：MIT
 - 隐私：纯本地运行，零网络请求，无遥测
 
