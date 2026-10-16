@@ -2,6 +2,7 @@
 using System.Windows;
 using System.Windows.Threading;
 using PerAppAudio.RuleEngine;
+using PerAppAudio.SessionManager;
 using WinForms = System.Windows.Forms;
 
 namespace PerAppAudio.App.Wpf;
@@ -24,6 +25,24 @@ public partial class App : System.Windows.Application
     protected override void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
+
+        // COM RCW 预热必须在任何自研设备枚举（MainWindow 构造里会调 DeviceManager）之前：
+        // NAudio 与自研 COM 共享 CLSID_MMDeviceEnumerator，顺序颠倒会 InvalidCastException。
+        WasapiSessionSource.Warmup();
+
+        // 全局异常兜底：写日志 + 提示，避免静默退出
+        DispatcherUnhandledException += (_, args) =>
+        {
+            args.Handled = true;
+            ReportCrash("UI 线程异常", args.Exception);
+        };
+        AppDomain.CurrentDomain.UnhandledException += (_, args) =>
+        {
+            if (args.ExceptionObject is Exception ex)
+            {
+                ReportCrash("非 UI 线程异常", ex);
+            }
+        };
 
         _host = AppHost.TryAcquireSingleInstance();
         if (_host is null)
@@ -89,6 +108,22 @@ public partial class App : System.Windows.Application
             ContextMenuStrip = _trayMenu,
         };
         _tray.DoubleClick += (_, _) => ShowMainWindow();
+    }
+
+    private static void ReportCrash(string title, Exception ex)
+    {
+        string line = $"[严重] {title}: {ex}";
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(LogPath)!);
+            File.AppendAllText(LogPath, $"{DateTime.Now:HH:mm:ss} {line}{Environment.NewLine}");
+        }
+        catch
+        {
+        }
+
+        System.Windows.MessageBox.Show($"{title}：{ex.Message}\n\n详见日志：{LogPath}",
+            "PerAppAudio", MessageBoxButton.OK, MessageBoxImage.Error);
     }
 
     /// <summary>加载应用图标（托盘 / 窗口共用）；缺失时回退系统图标。</summary>

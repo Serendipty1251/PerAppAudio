@@ -31,6 +31,10 @@ public partial class MainWindow : Window
 
     public MainWindow()
     {
+        // 注意：必须先于 InitializeComponent 创建——XAML 中 CheckBox 的 IsChecked="True"
+        // 会在解析阶段立即触发 Checked 事件，其处理器会访问本定时器。
+        _refreshTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
+
         InitializeComponent();
         _host = ((App)System.Windows.Application.Current).Host;
 
@@ -46,7 +50,6 @@ public partial class MainWindow : Window
         _host.Log += AppendLogThreadSafe;
         _host.RoutesChanged += RefreshThreadSafe;
 
-        _refreshTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
         _refreshTimer.Tick += (_, _) => Refresh();
         _refreshTimer.Start();
 
@@ -273,7 +276,6 @@ public partial class MainWindow : Window
     private void RefreshPlayingSessions()
     {
         var sessions = WasapiSessionSource.EnumerateSessions();
-        var byPid = _sessions.ToDictionary(r => r.ProcessId);
         var seen = new HashSet<int>();
 
         foreach (var s in sessions)
@@ -284,7 +286,8 @@ public partial class MainWindow : Window
             }
             seen.Add(s.ProcessId);
 
-            if (!byPid.TryGetValue(s.ProcessId, out var row))
+            var row = _sessions.FirstOrDefault(r => r.ProcessId == s.ProcessId);
+            if (row is null)
             {
                 row = new SessionRow
                 {
@@ -307,9 +310,9 @@ public partial class MainWindow : Window
             };
         }
 
-        foreach (var key in byPid.Keys.Where(k => !seen.Contains(k)).ToList())
+        foreach (var stale in _sessions.Where(r => !seen.Contains(r.ProcessId)).ToList())
         {
-            _sessions.Remove(byPid[key]);
+            _sessions.Remove(stale);
         }
 
         // 当前设备（会话所在设备）
@@ -366,7 +369,8 @@ public partial class MainWindow : Window
 
     private void AutoRefresh_Changed(object sender, RoutedEventArgs e)
     {
-        _refreshTimer.IsEnabled = AutoRefreshCheck.IsChecked == true;
+        if (_refreshTimer is null) return; // XAML 初始化期字段尚未就绪
+        _refreshTimer.IsEnabled = AutoRefreshCheck?.IsChecked == true;
     }
 
     private void RefreshNow_Click(object sender, RoutedEventArgs e) => Refresh();
