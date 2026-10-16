@@ -91,6 +91,45 @@ public class WasapiSessionSource : IAudioSessionSource
 
     IReadOnlyList<AudioSessionInfo> IAudioSessionSource.EnumerateSessions() => EnumerateSessions();
 
+    /// <summary>
+    /// 建立「进程 → 其音频会话所在设备」映射（UI 显示"当前设备"用）。
+    /// 同一进程可能在多个设备上有会话（多流应用），取第一个命中。
+    /// </summary>
+    public static Dictionary<int, string> GetDeviceOfProcesses()
+    {
+        var map = new Dictionary<int, string>();
+        foreach (var device in EnumerateRenderDevices(null))
+        {
+            try
+            {
+                var sessions = device.AudioSessionManager.Sessions;
+                for (int i = 0; i < sessions.Count; i++)
+                {
+                    try
+                    {
+                        var s = sessions[i];
+                        int pid = (int)s.GetProcessID;
+                        if (pid > 0 && !map.ContainsKey(pid))
+                        {
+                            map[pid] = device.FriendlyName;
+                        }
+                    }
+                    catch
+                    {
+                    }
+                }
+            }
+            catch
+            {
+            }
+            finally
+            {
+                device.Dispose();
+            }
+        }
+        return map;
+    }
+
     /// <summary>一个进程会话的音量控制状态快照（诊断用）。</summary>
     public sealed record SessionVolumeInfo(string Device, int ProcessId, string DisplayName, float Volume, bool Muted);
 

@@ -6,6 +6,10 @@
     <ProjectReference Include="..\RuleEngine\PerAppAudio.RuleEngine.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <Resource Include="app-icon.ico" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
     <TargetFramework>net8.0-windows</TargetFramework>
@@ -15,6 +19,7 @@
     <UseWindowsForms>true</UseWindowsForms>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <AssemblyName>PerAppAudio</AssemblyName>
+    <ApplicationIcon>app-icon.ico</ApplicationIcon>
     <RootNamespace>PerAppAudio.App.Wpf</RootNamespace>
     <Version>0.3.0</Version>
     <Product>PerAppAudio</Product>

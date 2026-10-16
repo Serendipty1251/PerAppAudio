@@ -83,12 +83,38 @@ public partial class App : System.Windows.Application
 
         _tray = new WinForms.NotifyIcon
         {
-            Icon = System.Drawing.SystemIcons.Application,
+            Icon = LoadAppIcon(),
             Text = "PerAppAudio 每应用音频路由",
             Visible = true,
             ContextMenuStrip = _trayMenu,
         };
         _tray.DoubleClick += (_, _) => ShowMainWindow();
+    }
+
+    /// <summary>加载应用图标（托盘 / 窗口共用）；缺失时回退系统图标。</summary>
+    private static System.Drawing.Icon LoadAppIcon()
+    {
+        string[] candidates =
+        {
+            Path.Combine(AppContext.BaseDirectory, "app-icon.ico"),
+            Path.Combine(Directory.GetCurrentDirectory(), "app-icon.ico"),
+        };
+
+        foreach (var path in candidates)
+        {
+            try
+            {
+                if (File.Exists(path))
+                {
+                    return new System.Drawing.Icon(path);
+                }
+            }
+            catch
+            {
+            }
+        }
+
+        return System.Drawing.SystemIcons.Application;
     }
 
     private void RebuildProfileMenu(WinForms.ToolStripMenuItem profileItem)

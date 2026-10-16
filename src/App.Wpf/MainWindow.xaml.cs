@@ -24,6 +24,7 @@ public partial class MainWindow : Window
     private readonly DispatcherTimer _refreshTimer;
     private readonly ObservableCollection<RouteRow> _rows = new();
     private readonly ObservableCollection<SessionRow> _sessions = new();
+    private System.ComponentModel.ICollectionView? _sessionView;
     private bool _allowClose;
 
     public ObservableCollection<string> Devices { get; } = new();
@@ -49,7 +50,11 @@ public partial class MainWindow : Window
         _refreshTimer.Tick += (_, _) => Refresh();
         _refreshTimer.Start();
 
-        Loaded += (_, _) => Refresh();
+        _sessionView = System.Windows.Data.CollectionViewSource.GetDefaultView(_sessions);
+        _sessionView.Filter = SessionFilter;
+
+        Loaded += (_, _) => { RestoreWindowGeometry(); Refresh(); };
+        Closed += (_, _) => SaveWindowGeometry();
         Closing += Window_Closing;
     }
 
@@ -76,7 +81,10 @@ public partial class MainWindow : Window
     public void AppendLog(string line)
     {
         LogBox.AppendText(line + Environment.NewLine);
-        LogBox.ScrollToEnd();
+        if (AutoScrollCheck?.IsChecked != false)
+        {
+            LogBox.ScrollToEnd();
+        }
     }
 
     private void AppendLogThreadSafe(string line)
@@ -130,7 +138,7 @@ public partial class MainWindow : Window
         // 「正在播放」列表：会话枚举（NAudio，真实 PID）+ 保留用户选择
         RefreshPlayingSessions();
 
-        StatusText.Text = $"路由表 {_host.Store.Routes.Count} 条  |  活动链路 {live.Count} 条  |  日志 {App.LogPath}";
+        StatusText.Text = $"v0.4  ·  路由表 {_host.Store.Routes.Count} 条  |  活动链路 {live.Count} 条  |  日志 {App.LogPath}";
     }
 
     // ---------- 路由行操作 ----------
@@ -303,6 +311,19 @@ public partial class MainWindow : Window
         {
             _sessions.Remove(byPid[key]);
         }
+
+        // 当前设备（会话所在设备）
+        var deviceOf = WasapiSessionSource.GetDeviceOfProcesses();
+        foreach (var row in _sessions)
+        {
+            row.CurrentDevice = deviceOf.TryGetValue(row.ProcessId, out var dev) ? dev : "-";
+        }
+
+        PlayingEmptyHint.Visibility = _sessions.Count == 0
+            ? System.Windows.Visibility.Visible
+            : System.Windows.Visibility.Collapsed;
+
+        _sessionView?.Refresh();
     }
 
     private static string GetDefaultDevice()
@@ -336,6 +357,106 @@ public partial class MainWindow : Window
         }
         RefreshThreadSafe();
     }
+
+    // ---------- 交互增强 ----------
+
+    private void SearchBox_TextChanged(object sender, TextChangedEventArgs e) => _sessionView?.Refresh();
+
+    private void Filter_Changed(object sender, RoutedEventArgs e) => _sessionView?.Refresh();
+
+    private void AutoRefresh_Changed(object sender, RoutedEventArgs e)
+    {
+        _refreshTimer.IsEnabled = AutoRefreshCheck.IsChecked == true;
+    }
+
+    private void RefreshNow_Click(object sender, RoutedEventArgs e) => Refresh();
+
+    private void ClearLog_Click(object sender, RoutedEventArgs e) => LogBox.Clear();
+
+    private void ReapplyAll_Click(object sender, RoutedEventArgs e)
+    {
+        foreach (var stored in _host.Store.Routes)
+        {
+            foreach (var process in ProcessFinder.Find(stored.ProcessPath))
+            {
+                using (process)
+                {
+                    var device = DeviceManager.ResolveDevice(stored.DeviceName);
+                    var command = new RoutingCommand(process.Id, stored.ProcessPath,
+                        new AudioDeviceRef(device.FriendlyName, device.Id), stored.Volume, stored.Mute);
+                    var report = _host.Coordinator.ApplyRouteAsync(command, stored.Mode).GetAwaiter().GetResult();
+                    AppendLog($"[重应用] {Path.GetFileName(stored.ProcessPath)}（PID {process.Id}）→ {device.FriendlyName} | " +
+                        $"B2 {(report.EndpointApplied ? "✅" : "❌")} A {(report.LoopbackActive ? "✅" : "❌")}");
+                }
+            }
+        }
+        Refresh();
+    }
+
+    /// <summary>会话列表过滤：搜索文本 + 仅播放中。</summary>
+    private bool SessionFilter(object item)
+    {
+        if (item is not SessionRow row)
+        {
+            return false;
+        }
+
+        if (OnlyPlayingCheck?.IsChecked == true && row.State != "播放中")
+        {
+            return false;
+        }
+
+        string text = SearchBox?.Text?.Trim() ?? string.Empty;
+        if (string.IsNullOrEmpty(text))
+        {
+            return true;
+        }
+
+        return row.ProcessName.Contains(text, StringComparison.OrdinalIgnoreCase)
+            || row.DisplayName.Contains(text, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private void RestoreWindowGeometry()
+    {
+        try
+        {
+            string path = UiSettingsPath;
+            if (!File.Exists(path)) return;
+            var json = File.ReadAllText(path);
+            var doc = System.Text.Json.JsonDocument.Parse(json);
+            var root = doc.RootElement;
+            if (root.TryGetProperty("left", out var l) && root.TryGetProperty("top", out var t))
+            {
+                Left = l.GetDouble();
+                Top = t.GetDouble();
+            }
+            if (root.TryGetProperty("width", out var w) && root.TryGetProperty("height", out var h))
+            {
+                Width = Math.Max(MinWidth, w.GetDouble());
+                Height = Math.Max(MinHeight, h.GetDouble());
+            }
+        }
+        catch
+        {
+            // 设置损坏不影响启动
+        }
+    }
+
+    private void SaveWindowGeometry()
+    {
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(UiSettingsPath)!);
+            File.WriteAllText(UiSettingsPath,
+                $"{{\"left\":{Left},\"top\":{Top},\"width\":{Width},\"height\":{Height}}}");
+        }
+        catch
+        {
+        }
+    }
+
+    private static string UiSettingsPath =>
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "PerAppAudio", "ui.json");
 
     private static RoutingMode ParseMode(string text) => text.ToLowerInvariant() switch
     {
@@ -435,7 +556,7 @@ public sealed class SessionRow : INotifyPropertyChanged
     public string DeviceName
     {
         get => _deviceName;
-        set { _deviceName = value; OnPropertyChanged(); }
+        set { _deviceName = value; OnPropertyChanged(); OnPropertyChanged(nameof(CanApply)); }
     }
 
     private float _volume = 1f;
@@ -449,8 +570,38 @@ public sealed class SessionRow : INotifyPropertyChanged
     public string State
     {
         get => _state;
-        set { _state = value; OnPropertyChanged(); }
+        set
+        {
+            _state = value;
+            StateBrush = value switch
+            {
+                "播放中" => System.Windows.Media.Brushes.ForestGreen,
+                "已退出" => System.Windows.Media.Brushes.Gray,
+                _ => System.Windows.Media.Brushes.Orange,
+            };
+            OnPropertyChanged();
+        }
     }
+
+    private System.Windows.Media.Brush _stateBrush = System.Windows.Media.Brushes.Orange;
+    public System.Windows.Media.Brush StateBrush
+    {
+        get => _stateBrush;
+        private set { _stateBrush = value; OnPropertyChanged(); }
+    }
+
+    private string _currentDevice = "-";
+    public string CurrentDevice
+    {
+        get => _currentDevice;
+        set { _currentDevice = value; OnPropertyChanged(); OnPropertyChanged(nameof(CanApply)); }
+    }
+
+    /// <summary>目标设备与当前设备相同时无需改道（按钮置灰）。</summary>
+    public bool CanApply => !string.Equals(DeviceName, CurrentDevice, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>排序权重：播放中优先。</summary>
+    public int SortRank => State == "播放中" ? 0 : 1;
 
     public event PropertyChangedEventHandler? PropertyChanged;
     private void OnPropertyChanged([CallerMemberName] string? name = null) =>
