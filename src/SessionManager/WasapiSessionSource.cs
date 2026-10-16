@@ -1,16 +1,30 @@
 using System.Diagnostics;
-using System.Runtime.InteropServices;
-using PerAppAudio.WasapiInterop;
+using NAudio.CoreAudioApi;
 
 namespace PerAppAudio.SessionManager;
 
 /// <summary>
-/// WASAPI 音频会话感知源：枚举渲染设备上的音频会话（PID / 路径 / 状态），
-/// 并提供按进程静音 / 恢复的能力（手段A 的双重播放守护基础）。
+/// WASAPI 音频会话感知源（基于 NAudio.Core，MIT）：
+/// 枚举渲染设备上的音频会话（PID / 路径 / 状态），并提供按进程音量 / 静音控制。
+/// 注：自研 IAudioSessionControl2 COM 声明在本机（Win11 26200）实测不可靠
+/// （GetProcessId 恒 0），改用被广泛验证的 NAudio 实现后会话枚举完全正常。
 /// </summary>
 public class WasapiSessionSource : IAudioSessionSource
 {
-    private const int ClsctxAll = 0x17;
+    // 进程级共享 NAudio 枚举器：与自研 COM 共享 CLSID_MMDeviceEnumerator，
+    // 实测只有 NAudio 的 ComImport 类 RCW 先创建时两者才能共存（反向实验通过）。
+    // 因此进程启动必须调用 Warmup()（AppHost.StartAsync 首行），此后永久持有不释放。
+    private static readonly object EnumeratorGate = new();
+    private static MMDeviceEnumerator? _sharedEnumerator;
+
+    /// <summary>预热共享枚举器（必须先于任何自研 COM 设备枚举调用）。</summary>
+    public static void Warmup()
+    {
+        lock (EnumeratorGate)
+        {
+            _sharedEnumerator ??= new MMDeviceEnumerator();
+        }
+    }
 
     /// <summary>枚举所有活动渲染设备上的会话；deviceId 非空时只查该设备。</summary>
     public static IReadOnlyList<AudioSessionInfo> EnumerateSessions(string? deviceId = null)
@@ -18,48 +32,28 @@ public class WasapiSessionSource : IAudioSessionSource
         var result = new List<AudioSessionInfo>();
         foreach (var device in EnumerateRenderDevices(deviceId))
         {
-            IAudioSessionManager2? manager = null;
-            IAudioSessionEnumerator? enumerator = null;
             try
             {
-                var iid = Guid.Parse(Guids.IID_IAudioSessionManager2);
-                device.Activate(ref iid, ClsctxAll, IntPtr.Zero, out object mgr);
-                manager = (IAudioSessionManager2)mgr;
-                manager.GetSessionEnumerator(out enumerator);
-
-                int count = enumerator.GetCount();
-                for (int i = 0; i < count; i++)
+                var sessions = device.AudioSessionManager.Sessions;
+                for (int i = 0; i < sessions.Count; i++)
                 {
                     try
                     {
-                        var control = enumerator.GetSession(i);
-                        var control2 = (IAudioSessionControl2)control;
-                        control2.GetProcessId(out int pid);
-                        string display = control.GetDisplayName() ?? string.Empty;
-                        var state = control.GetState();
-                        // IsSystemSoundsSession：BOOL* 出参形态（Win11 26200 实测），true = 系统声音会话
+                        var s = sessions[i];
+                        int pid = (int)s.GetProcessID;
                         bool systemSounds = false;
-                        try { systemSounds = control2.IsSystemSoundsSession(); } catch { }
-                        string instanceId = "<unknown>";
-                        try
-                        {
-                            if (control2.GetSessionInstanceIdentifier(out IntPtr idPtr) >= 0 && idPtr != IntPtr.Zero)
-                            {
-                                instanceId = Marshal.PtrToStringUni(idPtr) ?? "<unknown>";
-                                Marshal.FreeCoTaskMem(idPtr);
-                            }
-                        }
-                        catch { }
+                        try { systemSounds = s.IsSystemSoundsSession; } catch { }
+                        string display = s.DisplayName ?? string.Empty;
 
                         result.Add(new AudioSessionInfo(
                             ProcessId: pid,
                             ProcessPath: ResolveProcessPath(pid),
-                            SessionId: instanceId,
+                            SessionId: TryGetSessionInstanceId(s),
                             DisplayName: systemSounds ? "系统声音" : (string.IsNullOrEmpty(display) ? ResolveProcessName(pid) : display),
-                            State: state switch
+                            State: s.State.ToString() switch
                             {
-                                AudioSessionState.Active => SessionState.Active,
-                                AudioSessionState.Expired => SessionState.Expired,
+                                "AudioSessionStateActive" => SessionState.Active,
+                                "AudioSessionStateExpired" => SessionState.Expired,
                                 _ => SessionState.Inactive,
                             }));
                     }
@@ -73,9 +67,26 @@ public class WasapiSessionSource : IAudioSessionSource
             {
                 // 设备级失败跳过
             }
+            finally
+            {
+                device.Dispose();
+            }
         }
 
         return result;
+    }
+
+    private static string TryGetSessionInstanceId(AudioSessionControl s)
+    {
+        try
+        {
+            string id = s.GetSessionInstanceIdentifier;
+            return string.IsNullOrEmpty(id) ? "<unknown>" : id;
+        }
+        catch
+        {
+            return "<unknown>";
+        }
     }
 
     IReadOnlyList<AudioSessionInfo> IAudioSessionSource.EnumerateSessions() => EnumerateSessions();
@@ -93,33 +104,19 @@ public class WasapiSessionSource : IAudioSessionSource
         {
             try
             {
-                var iid = Guid.Parse(Guids.IID_IAudioSessionManager2);
-                device.Activate(ref iid, ClsctxAll, IntPtr.Zero, out object mgr);
-                var manager = (IAudioSessionManager2)mgr;
-                manager.GetSessionEnumerator(out var enumerator);
-
-                int count = enumerator.GetCount();
-                for (int i = 0; i < count; i++)
+                var sessions = device.AudioSessionManager.Sessions;
+                for (int i = 0; i < sessions.Count; i++)
                 {
                     try
                     {
-                        var control = enumerator.GetSession(i);
-                        var control2 = (IAudioSessionControl2)control;
-                        control2.GetProcessId(out int pid);
-                        if (pid != processId) continue;
-
-                        var simple = (ISimpleAudioVolume)control;
-                        string display = control.GetDisplayName();
-                        if (string.IsNullOrEmpty(display))
-                        {
-                            display = "<unnamed>";
-                        }
+                        var s = sessions[i];
+                        if ((int)s.GetProcessID != processId) continue;
                         result.Add(new SessionVolumeInfo(
-                            Device: device.GetId(),
-                            ProcessId: pid,
-                            DisplayName: display,
-                            Volume: simple.GetMasterVolume(),
-                            Muted: simple.GetMute()));
+                            Device: device.ID,
+                            ProcessId: processId,
+                            DisplayName: string.IsNullOrEmpty(s.DisplayName) ? "<unnamed>" : s.DisplayName,
+                            Volume: s.SimpleAudioVolume.Volume,
+                            Muted: s.SimpleAudioVolume.Mute));
                     }
                     catch
                     {
@@ -128,6 +125,10 @@ public class WasapiSessionSource : IAudioSessionSource
             }
             catch
             {
+            }
+            finally
+            {
+                device.Dispose();
             }
         }
 
@@ -153,30 +154,21 @@ public class WasapiSessionSource : IAudioSessionSource
         {
             try
             {
-                var iid = Guid.Parse(Guids.IID_IAudioSessionManager2);
-                device.Activate(ref iid, ClsctxAll, IntPtr.Zero, out object mgr);
-                var manager = (IAudioSessionManager2)mgr;
-                manager.GetSessionEnumerator(out var enumerator);
-
-                int count = enumerator.GetCount();
-                for (int i = 0; i < count; i++)
+                var sessions = device.AudioSessionManager.Sessions;
+                for (int i = 0; i < sessions.Count; i++)
                 {
                     try
                     {
-                        var control = enumerator.GetSession(i);
-                        var control2 = (IAudioSessionControl2)control;
-                        control2.GetProcessId(out int pid);
-                        if (pid != processId) continue;
+                        var s = sessions[i];
+                        if ((int)s.GetProcessID != processId) continue;
 
-                        var simple = (ISimpleAudioVolume)control;
-                        var eventContext = Guid.Empty;
                         if (volume.HasValue)
                         {
-                            simple.SetMasterVolume(Math.Clamp(volume.Value, 0f, 1f), ref eventContext);
+                            s.SimpleAudioVolume.Volume = Math.Clamp(volume.Value, 0f, 1f);
                         }
                         if (mute.HasValue)
                         {
-                            simple.SetMute(mute.Value, ref eventContext);
+                            s.SimpleAudioVolume.Mute = mute.Value;
                         }
                         affected++;
                     }
@@ -188,41 +180,64 @@ public class WasapiSessionSource : IAudioSessionSource
             catch
             {
             }
+            finally
+            {
+                device.Dispose();
+            }
         }
 
         return affected;
     }
 
-    private static List<IMMDevice> EnumerateRenderDevices(string? deviceId)
+    /// <summary>按 ID 或名称解析渲染设备（走共享 NAudio 枚举器）。</summary>
+    public static MMDevice ResolveDevice(string idOrName)
     {
-        var devices = new List<IMMDevice>();
-        if (!string.IsNullOrEmpty(deviceId))
+        lock (EnumeratorGate)
         {
+            var enumerator = _sharedEnumerator ?? new MMDeviceEnumerator();
             try
             {
-                devices.Add(DeviceManager.GetDevice(deviceId));
+                return enumerator.GetDevice(idOrName);
             }
             catch
             {
+                foreach (var d in enumerator.EnumerateAudioEndPoints(DataFlow.Render, DeviceState.Active))
+                {
+                    if (d.FriendlyName.Contains(idOrName, StringComparison.OrdinalIgnoreCase))
+                    {
+                        return d;
+                    }
+                }
+                throw new InvalidOperationException($"未找到设备「{idOrName}」");
+            }
+        }
+    }
+
+    private static List<MMDevice> EnumerateRenderDevices(string? deviceId)
+    {
+        // 复用进程级共享枚举器（Warmup 已创建；调用需串行化）
+        lock (EnumeratorGate)
+        {
+            var enumerator = _sharedEnumerator ?? new MMDeviceEnumerator();
+            var devices = new List<MMDevice>();
+            if (!string.IsNullOrEmpty(deviceId))
+            {
+                try
+                {
+                    devices.Add(enumerator.GetDevice(deviceId));
+                }
+                catch
+                {
+                }
+                return devices;
+            }
+
+            foreach (var device in enumerator.EnumerateAudioEndPoints(DataFlow.Render, DeviceState.Active))
+            {
+                devices.Add(device);
             }
             return devices;
         }
-
-        var enumerator = DeviceManager.CreateEnumerator();
-        var collection = enumerator.EnumAudioEndpoints(EDataFlow.Render, DeviceState.Active);
-        int count = collection.GetCount();
-        for (int i = 0; i < count; i++)
-        {
-            try
-            {
-                devices.Add(collection.Item(i));
-            }
-            catch
-            {
-            }
-        }
-
-        return devices;
     }
 
     private static string ResolveProcessPath(int pid)

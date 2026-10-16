@@ -101,9 +101,18 @@ dotnet publish src/App.Cli -c Release -r win-x64 --self-contained true \
     -p:PublishSingleFile=true -p:EnableCompressionInSingleFile=true -o dist/PerAppAudio
 ```
 
-- 主程序 `PerAppAudio.exe`：单实例托盘常驻（AppHost：探测 + 看门狗 + 2s 扫描自动应用）；主窗口 = 路由表编辑（设备下拉 / 手段 / 音量滑条 / 移除）+ 活动链路 + 场景切换 + 日志；关窗即最小化到托盘。
-- 诊断 `PerAppAudio.Cli.exe`：devices / sessions / sessionvol / sessiondump / ctl / profile 全套命令。
+- 主程序 `PerAppAudio.exe`：单实例托盘常驻（AppHost：探测 + 看门狗 + 2s 扫描自动应用）；主窗口三页：
+  - **「正在播放」**：自动检测系统中有音频会话的应用（2 秒刷新），选设备/音量 → 一键改道并持久化；
+  - 「路由表」：持久路由编辑（设备下拉 / 手段 / 音量滑条 / 移除）；
+  - 「日志」：常驻协调日志。关窗即最小化到托盘。
+- 诊断 `PerAppAudio.Cli.exe`：devices / sessions / sessionvol / ctl / profile 全套命令。
 - 数据在 `%APPDATA%\PerAppAudio\`（routes.json / rules.yaml / app.log）。
+
+## 会话枚举修复（2026-10-16 晚间，重要技术决策）
+
+自研 `IAudioSessionControl2` COM 声明在本机（Win11 26200）实测**不可靠**（GetProcessId 恒 0、无参 IsSystemSoundsSession 调用 AV）——经 NAudio 对照实验定案系统行为正常、问题在自研声明。**已改用 NAudio 2.1.0（MIT）实现会话层**，枚举/音量/静音全部正常（真实 PID + 显示名）。
+
+附发现：自研 COM 与 NAudio 共享 `CLSID_MMDeviceEnumerator`，同进程混用会 InvalidCastException——需在进程启动时预热 NAudio 枚举器（AppHost.StartAsync / CLI Main 首行 `WasapiSessionSource.Warmup()`），自研 Activator 枚举在其后完全正常（反向兼容实测通过）。
 
 ## P1 控制闭环实测结果（2026-10-16，Win11 build 26200）
 

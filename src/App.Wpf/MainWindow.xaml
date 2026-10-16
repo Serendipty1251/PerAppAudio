@@ -6,7 +6,7 @@
         xmlns:local="clr-namespace:PerAppAudio.App.Wpf"
         mc:Ignorable="d"
         Title="PerAppAudio — 每应用音频输出路由"
-        Height="600" Width="980"
+        Height="640" Width="1020"
         Closing="Window_Closing">
     <DockPanel Margin="10">
         <!-- 顶部工具条 -->
@@ -24,23 +24,55 @@
             </StatusBarItem>
         </StatusBar>
 
-        <Grid>
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="*"/>
-                <ColumnDefinition Width="330"/>
-            </Grid.ColumnDefinitions>
-
-            <!-- 左：路由表 -->
-            <GroupBox Grid.Column="0" Header="路由表（持久化，应用启动即自动路由）">
-                <DockPanel>
-                    <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" Margin="0,6,0,0">
-                        <TextBlock Text="PID:" VerticalAlignment="Center"/>
-                        <TextBox x:Name="PidBox" Width="70" Margin="4,0,6,0"/>
-                        <ComboBox x:Name="AddDeviceBox" Width="180"/>
-                        <Button Content="添加路由" Padding="12,3" Margin="6,0,0,0" Click="AddRoute_Click"/>
-                    </StackPanel>
-                    <DataGrid x:Name="RouteGrid" AutoGenerateColumns="False" CanUserAddRows="False"
+        <TabControl>
+            <!-- Tab 1：正在播放（自动检测） -->
+            <TabItem Header="正在播放">
+                <DockPanel Margin="6">
+                    <TextBlock DockPanel.Dock="Top" Text="自动检测系统中有音频会话的应用；选择输出设备后点「应用」立即改道并持久化。"
+                               Foreground="#616161" FontSize="12" Margin="0,0,0,6"/>
+                    <DataGrid x:Name="PlayingGrid" AutoGenerateColumns="False" CanUserAddRows="False"
                               HeadersVisibility="Column" IsReadOnly="False" SelectionMode="Single"
+                              RowHeight="32" FontSize="12">
+                        <DataGrid.Columns>
+                            <DataGridTextColumn Header="进程" Binding="{Binding ProcessName}" Width="150" IsReadOnly="True"/>
+                            <DataGridTextColumn Header="会话" Binding="{Binding DisplayName}" Width="140" IsReadOnly="True"/>
+                            <DataGridTextColumn Header="状态" Binding="{Binding State}" Width="70" IsReadOnly="True"/>
+                            <DataGridTemplateColumn Header="输出设备" Width="220">
+                                <DataGridTemplateColumn.CellTemplate>
+                                    <DataTemplate>
+                                        <ComboBox ItemsSource="{Binding DataContext.Devices, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                  SelectedItem="{Binding DeviceName, UpdateSourceTrigger=PropertyChanged}"
+                                                  FontSize="12"/>
+                                    </DataTemplate>
+                                </DataGridTemplateColumn.CellTemplate>
+                            </DataGridTemplateColumn>
+                            <DataGridTemplateColumn Header="音量" Width="100">
+                                <DataGridTemplateColumn.CellTemplate>
+                                    <DataTemplate>
+                                        <Slider Minimum="0" Maximum="1" Value="{Binding Volume, UpdateSourceTrigger=PropertyChanged}"
+                                                Width="90" VerticalAlignment="Center"/>
+                                    </DataTemplate>
+                                </DataGridTemplateColumn.CellTemplate>
+                            </DataGridTemplateColumn>
+                            <DataGridTemplateColumn Header="" Width="80">
+                                <DataGridTemplateColumn.CellTemplate>
+                                    <DataTemplate>
+                                        <Button Content="应用" Padding="8,2" Click="ApplySession_Click" FontSize="12"/>
+                                    </DataTemplate>
+                                </DataGridTemplateColumn.CellTemplate>
+                            </DataGridTemplateColumn>
+                        </DataGrid.Columns>
+                    </DataGrid>
+                </DockPanel>
+            </TabItem>
+
+            <!-- Tab 2：路由表（持久化） -->
+            <TabItem Header="路由表">
+                <DockPanel Margin="6">
+                    <TextBlock DockPanel.Dock="Top" Text="持久路由：应用启动即按此表自动路由（2–4 秒内生效）。"
+                               Foreground="#616161" FontSize="12" Margin="0,0,0,6"/>
+                    <DataGrid x:Name="RouteGrid" AutoGenerateColumns="False" CanUserAddRows="False"
+                              HeadersVisibility="Column" SelectionMode="Single"
                               RowHeight="30" FontSize="12">
                         <DataGrid.Columns>
                             <DataGridTextColumn Header="进程" Binding="{Binding ProcessName}" Width="140" IsReadOnly="True"/>
@@ -68,8 +100,7 @@
                             <DataGridTemplateColumn Header="音量" Width="110">
                                 <DataGridTemplateColumn.CellTemplate>
                                     <DataTemplate>
-                                        <Slider Minimum="0" Maximum="1" TickFrequency="0.1" IsSnapToTickEnabled="True"
-                                                Value="{Binding Volume, UpdateSourceTrigger=PropertyChanged}"
+                                        <Slider Minimum="0" Maximum="1" Value="{Binding Volume, UpdateSourceTrigger=PropertyChanged}"
                                                 ValueChanged="Volume_Changed" Width="100" VerticalAlignment="Center"/>
                                     </DataTemplate>
                                 </DataGridTemplateColumn.CellTemplate>
@@ -85,19 +116,15 @@
                         </DataGrid.Columns>
                     </DataGrid>
                 </DockPanel>
-            </GroupBox>
+            </TabItem>
 
-            <!-- 右：活动路由 + 日志 -->
-            <StackPanel Grid.Column="1" Margin="8,0,0,0">
-                <GroupBox Header="活动 A 链路（实时改道中）" Height="170">
-                    <ListBox x:Name="LiveBox" FontSize="12"/>
-                </GroupBox>
-                <GroupBox Header="日志" Margin="0,8,0,0">
+            <!-- Tab 3：日志 -->
+            <TabItem Header="日志">
+                <DockPanel Margin="6">
                     <TextBox x:Name="LogBox" IsReadOnly="True" TextWrapping="Wrap"
-                             VerticalScrollBarVisibility="Auto" FontFamily="Consolas" FontSize="11"
-                             Height="300"/>
-                </GroupBox>
-            </StackPanel>
-        </Grid>
+                             VerticalScrollBarVisibility="Auto" FontFamily="Consolas" FontSize="11"/>
+                </DockPanel>
+            </TabItem>
+        </TabControl>
     </DockPanel>
 </Window>

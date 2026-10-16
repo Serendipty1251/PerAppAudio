@@ -1,4 +1,4 @@
-﻿using System.Collections.ObjectModel;
+using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
@@ -8,6 +8,7 @@ using System.Windows.Controls;
 using System.Windows.Threading;
 using PerAppAudio.RoutingEngine;
 using PerAppAudio.RuleEngine;
+using PerAppAudio.SessionManager;
 using PerAppAudio.WasapiInterop;
 using ComboBox = System.Windows.Controls.ComboBox;
 
@@ -22,6 +23,7 @@ public partial class MainWindow : Window
     private readonly AppHost _host;
     private readonly DispatcherTimer _refreshTimer;
     private readonly ObservableCollection<RouteRow> _rows = new();
+    private readonly ObservableCollection<SessionRow> _sessions = new();
     private bool _allowClose;
 
     public ObservableCollection<string> Devices { get; } = new();
@@ -37,7 +39,7 @@ public partial class MainWindow : Window
         }
 
         RouteGrid.ItemsSource = _rows;
-        AddDeviceBox.ItemsSource = Devices;
+        PlayingGrid.ItemsSource = _sessions;
         ProfileBox.ItemsSource = _host.Rules.Profiles.Select(p => p.Name).ToList();
 
         _host.Log += AppendLogThreadSafe;
@@ -125,13 +127,8 @@ public partial class MainWindow : Window
             _rows.Remove(row);
         }
 
-        // 活动链路
-        LiveBox.Items.Clear();
-        foreach (var l in live)
-        {
-            LiveBox.Items.Add($"PID {l.ProcessId}  {Path.GetFileName(l.ProcessPath)} → {l.TargetDevice}  " +
-                $"[{(l.LoopbackActive ? "A✅" : "A—")} {(l.EndpointApplied ? "B2✅" : "B2—")}]");
-        }
+        // 「正在播放」列表：会话枚举（NAudio，真实 PID）+ 保留用户选择
+        RefreshPlayingSessions();
 
         StatusText.Text = $"路由表 {_host.Store.Routes.Count} 条  |  活动链路 {live.Count} 条  |  日志 {App.LogPath}";
     }
@@ -234,52 +231,86 @@ public partial class MainWindow : Window
         Refresh();
     }
 
-    private void AddRoute_Click(object sender, RoutedEventArgs e)
+    // ---------- 场景 ----------
+
+    private void ApplySession_Click(object sender, RoutedEventArgs e)
     {
-        if (!int.TryParse(PidBox.Text.Trim(), out int pid) || pid <= 0)
-        {
-            System.Windows.MessageBox.Show(this, "请输入有效 PID（任务管理器可查）", "PerAppAudio",
-                MessageBoxButton.OK, MessageBoxImage.Warning);
-            return;
-        }
-
-        if (AddDeviceBox.SelectedItem is not string deviceName)
+        var row = (sender as FrameworkElement)?.DataContext as SessionRow;
+        if (row is null || row.ProcessId <= 0)
         {
             return;
         }
 
-        string processPath;
-        try
-        {
-            using var process = Process.GetProcessById(pid);
-            processPath = RouteStore.ResolveProcessPath(pid);
-        }
-        catch (Exception ex)
-        {
-            System.Windows.MessageBox.Show(this, $"进程不存在: {ex.Message}", "PerAppAudio",
-                MessageBoxButton.OK, MessageBoxImage.Warning);
-            return;
-        }
+        var device = DeviceManager.ResolveDevice(row.DeviceName);
+        string processPath = RouteStore.ResolveProcessPath(row.ProcessId);
 
-        var device = DeviceManager.ResolveDevice(deviceName);
-        var stored = new StoredRoute
+        _host.Store.Upsert(new StoredRoute
         {
             ProcessPath = processPath,
             DeviceId = device.Id,
             DeviceName = device.FriendlyName,
             Mode = RoutingMode.Auto,
-            Volume = 1f,
-        };
-        _host.Store.Upsert(stored);
+            Volume = row.Volume,
+        });
 
-        var command = new RoutingCommand(pid, processPath, new AudioDeviceRef(device.FriendlyName, device.Id), 1f, false);
-        _host.Coordinator.ApplyRouteAsync(command, RoutingMode.Auto).GetAwaiter().GetResult();
-        AppendLog($"[添加] PID {pid}（{Path.GetFileName(processPath)}）→ {device.FriendlyName}");
-        PidBox.Clear();
+        var command = new RoutingCommand(row.ProcessId, processPath,
+            new AudioDeviceRef(device.FriendlyName, device.Id), row.Volume, false);
+        var report = _host.Coordinator.ApplyRouteAsync(command, RoutingMode.Auto).GetAwaiter().GetResult();
+        AppendLog($"[应用] {row.ProcessName}（PID {row.ProcessId}）→ {device.FriendlyName} vol {row.Volume:F2} | " +
+            $"B2 {(report.EndpointApplied ? "✅" : "❌")} A {(report.LoopbackActive ? "✅" : "❌")}");
         Refresh();
     }
 
-    // ---------- 场景 ----------
+    /// <summary>刷新「正在播放」列表：保留用户已选的设备/音量。</summary>
+    private void RefreshPlayingSessions()
+    {
+        var sessions = WasapiSessionSource.EnumerateSessions();
+        var byPid = _sessions.ToDictionary(r => r.ProcessId);
+        var seen = new HashSet<int>();
+
+        foreach (var s in sessions)
+        {
+            if (s.ProcessId <= 0)
+            {
+                continue; // 系统声音不显示
+            }
+            seen.Add(s.ProcessId);
+
+            if (!byPid.TryGetValue(s.ProcessId, out var row))
+            {
+                row = new SessionRow
+                {
+                    ProcessId = s.ProcessId,
+                    ProcessName = string.IsNullOrEmpty(Path.GetFileName(s.ProcessPath)) || s.ProcessPath.StartsWith("(")
+                        ? s.DisplayName
+                        : Path.GetFileName(s.ProcessPath),
+                    DisplayName = s.DisplayName,
+                    DeviceName = GetDefaultDevice(),
+                    Volume = 1f,
+                };
+                _sessions.Add(row);
+            }
+
+            row.State = s.State switch
+            {
+                PerAppAudio.SessionManager.SessionState.Active => "播放中",
+                PerAppAudio.SessionManager.SessionState.Expired => "已退出",
+                _ => "静默",
+            };
+        }
+
+        foreach (var key in byPid.Keys.Where(k => !seen.Contains(k)).ToList())
+        {
+            _sessions.Remove(byPid[key]);
+        }
+    }
+
+    private static string GetDefaultDevice()
+    {
+        var devices = DeviceManager.EnumerateRenderDevices();
+        var d = devices.FirstOrDefault(x => x.IsDefaultConsole) ?? devices.FirstOrDefault() ?? devices[0];
+        return d.FriendlyName;
+    }
 
     private void ApplyProfile_Click(object sender, RoutedEventArgs e)
     {
@@ -389,6 +420,39 @@ public sealed class RouteRow : INotifyPropertyChanged
 
     public event PropertyChangedEventHandler? PropertyChanged;
 
+    private void OnPropertyChanged([CallerMemberName] string? name = null) =>
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
+}
+
+/// <summary>「正在播放」会话行（自动检测列表）。</summary>
+public sealed class SessionRow : INotifyPropertyChanged
+{
+    public int ProcessId { get; set; }
+    public string ProcessName { get; set; } = string.Empty;
+    public string DisplayName { get; set; } = string.Empty;
+
+    private string _deviceName = string.Empty;
+    public string DeviceName
+    {
+        get => _deviceName;
+        set { _deviceName = value; OnPropertyChanged(); }
+    }
+
+    private float _volume = 1f;
+    public float Volume
+    {
+        get => _volume;
+        set { _volume = value; OnPropertyChanged(); }
+    }
+
+    private string _state = "静默";
+    public string State
+    {
+        get => _state;
+        set { _state = value; OnPropertyChanged(); }
+    }
+
+    public event PropertyChangedEventHandler? PropertyChanged;
     private void OnPropertyChanged([CallerMemberName] string? name = null) =>
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
 }

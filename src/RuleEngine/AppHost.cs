@@ -1,4 +1,5 @@
 using PerAppAudio.RoutingEngine;
+using PerAppAudio.SessionManager;
 using PerAppAudio.WasapiInterop;
 
 namespace PerAppAudio.RuleEngine;
@@ -55,9 +56,13 @@ public sealed class AppHost : IDisposable
         return new AppHost(store, mutex);
     }
 
-    /// <summary>启动常驻核心：探测 → 立即扫一轮 → 看门狗 → 周期扫描。</summary>
+    /// <summary>启动常驻核心：预热 → 探测 → 立即扫一轮 → 看门狗 → 周期扫描。</summary>
     public async Task StartAsync(int scanIntervalMs = 2000, CancellationToken ct = default)
     {
+        // 进程级 COM RCW 预热：NAudio 枚举器必须先于自研 COM 设备枚举创建
+        // （两者共享 CLSID_MMDeviceEnumerator，顺序颠倒会 InvalidCastException）
+        WasapiSessionSource.Warmup();
+
         var (probeA, probeB2) = await _coordinator.ProbeAsync(ct).ConfigureAwait(false);
         _probeA = probeA;
         _probeB2 = probeB2;

@@ -20,13 +20,18 @@ internal static class Program
         Console.OutputEncoding = System.Text.Encoding.UTF8;
         try
         {
+            // 进程级 COM RCW 预热：NAudio 枚举器必须先于自研 COM 设备枚举创建
+            // （共享 CLSID_MMDeviceEnumerator，顺序颠倒会 InvalidCastException）
+            WasapiSessionSource.Warmup();
+
             if (args.Length == 0) return Usage();
             return args[0].ToLowerInvariant() switch
             {
                 "devices" => ListDevices(),
                 "sessions" => ListSessions(args),
                 "sessionvol" => RunSessionVol(args),
-                "sessiondump" => RunSessionDump(args),
+                "playwav" => RunPlayWav(args),
+                "nadesc" => RunNaudioDesc(args),
                 "route" => RunRoute(args),
                 "endpoint" => RunEndpoint(args),
                 "ctl" => RunCtl(args),
@@ -255,68 +260,102 @@ internal static class Program
         void GetState(out DeviceState state);
     }
 
-    /// <summary>会话接口原始诊断：逐方法打印 HRESULT 与返回值，用于 vtable 槽位排错。</summary>
-    private static int RunSessionDump(string[] args)
+    /// <summary>
+    /// 合成正弦音并经 WASAPI 渲染器播放到指定设备——标准 WASAPI 共享流，会话枚举验证用。
+    /// 样本按设备 Mix 格式生成（16/24/32bit 整型与 float32 均支持），零格式转换。
+    /// </summary>
+    private static int RunPlayWav(string[] args)
     {
-        string? deviceArg = GetOption(args, "--device");
-        var device = deviceArg is null
-            ? DeviceManager.ResolveDevice(GetDefaultDeviceId())
-            : DeviceManager.ResolveDevice(deviceArg);
+        string deviceName = GetOption(args, "--device") ?? GetDefaultDeviceId();
+        int ms = int.TryParse(GetOption(args, "--ms"), out int m) ? m : 8000;
+        double freq = double.TryParse(GetOption(args, "--freq"), out double f) ? f : 440.0;
 
-        Console.WriteLine($"设备: {device.FriendlyName}");
-        const int ClsctxAll = 0x17;
-        var iid = Guid.Parse(Guids.IID_IAudioSessionManager2);
-        var dev = DeviceManager.GetDevice(device.Id);
-        dev.Activate(ref iid, ClsctxAll, IntPtr.Zero, out object mgr);
-        var manager = (IAudioSessionManager2)mgr;
-        manager.GetSessionEnumerator(out var enumerator);
+        var device = DeviceManager.ResolveDevice(deviceName);
+        using var renderer = WasapiRenderer.Start(device.Id, bufferMilliseconds: 10);
+        var format = renderer.Format;
+        Console.WriteLine($"播放: {freq}Hz 正弦 → {device.FriendlyName}（{DeviceManager.DescribeFormat(format)}，缓冲 {renderer.BufferFrames} 帧，{ms} ms）");
+        Console.WriteLine($"[渲染器] 本进程 PID {Environment.ProcessId}——会话枚举应能看到此会话（实验目标）");
 
-        int count = enumerator.GetCount();
-        Console.WriteLine($"会话数: {count}");
-        for (int i = 0; i < count; i++)
+        bool isFloat = format.wFormatTag == 3;
+        int bytesPerSample = format.wBitsPerSample / 8;
+        int channels = format.nChannels;
+        int sampleRate = (int)format.nSamplesPerSec;
+        int framesPerPeriod = sampleRate * 10 / 1000;
+        int bytesPerPeriod = framesPerPeriod * channels * bytesPerSample;
+
+        double amplitude = isFloat ? 0.25 : (1 << (format.wBitsPerSample - 2));
+
+        var sw = Stopwatch.StartNew();
+        long framesWritten = 0;
+        long frameIndex = 0;
+        byte[] chunk = new byte[bytesPerPeriod];
+
+        while (sw.ElapsedMilliseconds < ms)
         {
-            Console.WriteLine($"--- 会话[{i}]");
-            var control = enumerator.GetSession(i);
+            for (int i = 0; i < framesPerPeriod; i++, frameIndex++)
+            {
+                double v = amplitude * Math.Sin(2 * Math.PI * freq * frameIndex / sampleRate);
+                for (int ch = 0; ch < channels; ch++)
+                {
+                    int offset = (i * channels + ch) * bytesPerSample;
+                    if (isFloat)
+                    {
+                        Buffer.BlockCopy(BitConverter.GetBytes((float)v), 0, chunk, offset, 4);
+                    }
+                    else if (bytesPerSample == 2)
+                    {
+                        Buffer.BlockCopy(BitConverter.GetBytes((short)v), 0, chunk, offset, 2);
+                    }
+                    else
+                    {
+                        Buffer.BlockCopy(BitConverter.GetBytes((int)v), 0, chunk, offset, 4);
+                    }
+                }
+            }
 
-            try { Console.WriteLine($"  GetState()           = {control.GetState()}"); }
-            catch (Exception ex) { Console.WriteLine($"  GetState()           抛 0x{ex.HResult:X8} {ex.Message}"); }
-
-            try { Console.WriteLine($"  GetDisplayName()     = {control.GetDisplayName()}"); }
-            catch (Exception ex) { Console.WriteLine($"  GetDisplayName()     抛 0x{ex.HResult:X8} {ex.Message}"); }
-
-            var control2 = (IAudioSessionControl2)control;
-
+            IntPtr ptr = Marshal.AllocHGlobal(bytesPerPeriod);
             try
             {
-                int hr = control2.GetSessionIdentifier(out IntPtr p1);
-                string s1 = p1 == IntPtr.Zero ? "(null)" : (Marshal.PtrToStringUni(p1) ?? "(empty)");
-                Console.WriteLine($"  GetSessionIdentifier hr=0x{hr:X8} → {s1}");
-                if (p1 != IntPtr.Zero) Marshal.FreeCoTaskMem(p1);
+                Marshal.Copy(chunk, 0, ptr, bytesPerPeriod);
+                framesWritten += renderer.Write(ptr, framesPerPeriod);
             }
-            catch (Exception ex) { Console.WriteLine($"  GetSessionIdentifier 抛 0x{ex.HResult:X8} {ex.Message}"); }
-
-            try
+            finally
             {
-                int hr = control2.GetSessionInstanceIdentifier(out IntPtr p2);
-                string s2 = p2 == IntPtr.Zero ? "(null)" : (Marshal.PtrToStringUni(p2) ?? "(empty)");
-                Console.WriteLine($"  GetSessionInstanceId hr=0x{hr:X8} → {s2}");
-                if (p2 != IntPtr.Zero) Marshal.FreeCoTaskMem(p2);
+                Marshal.FreeHGlobal(ptr);
             }
-            catch (Exception ex) { Console.WriteLine($"  GetSessionInstanceId 抛 0x{ex.HResult:X8} {ex.Message}"); }
+            Thread.Sleep(10);
+        }
 
-            try
-            {
-                int hr = control2.GetProcessId(out int pid);
-                Console.WriteLine($"  GetProcessId         hr=0x{hr:X8} → {pid}");
-            }
-            catch (Exception ex) { Console.WriteLine($"  GetProcessId         抛 0x{ex.HResult:X8} {ex.Message}"); }
+        Console.WriteLine($"[完成] 写入 {framesWritten} 帧（实时率 {(framesWritten / (double)sampleRate) / (ms / 1000.0) * 100:F1}%）");
+        return 0;
+    }
 
-            try
-            {
-                bool sys = control2.IsSystemSoundsSession();
-                Console.WriteLine($"  IsSystemSoundsSession → {sys}");
-            }
-            catch (Exception ex) { Console.WriteLine($"  IsSystemSoundsSession 抛 0x{ex.HResult:X8} {ex.Message}"); }
+    /// <summary>NAudio 对照：用成熟库枚举默认设备会话（本机会话可见性基准）。</summary>
+    private static int RunNaudioDesc(string[] args)
+    {
+        var enumerator = new NAudio.CoreAudioApi.MMDeviceEnumerator();
+        var device = enumerator.GetDefaultAudioEndpoint(
+            NAudio.CoreAudioApi.DataFlow.Render, NAudio.CoreAudioApi.Role.Multimedia);
+        Console.WriteLine($"设备: {device.FriendlyName}");
+
+        var sessions = device.AudioSessionManager.Sessions;
+        Console.WriteLine($"会话数: {sessions.Count}");
+        for (int i = 0; i < sessions.Count; i++)
+        {
+            var s = sessions[i];
+            Console.WriteLine($"[{i}] PID {s.GetProcessID}  \"{s.DisplayName}\"  {s.State}");
+        }
+
+        // 反向兼容性实验：NAudio enumerator 已创建后，我们的 Activator 枚举是否仍可用
+        Console.WriteLine("=== 反向实验：NAudio 先创建，我们的 DeviceManager 后枚举 ===");
+        try
+        {
+            var ours = DeviceManager.EnumerateRenderDevices();
+            Console.WriteLine($"我们的枚举正常：{ours.Count} 个设备（首: {ours[0].FriendlyName}）");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"我们的枚举失败: 0x{ex.HResult:X8} {ex.Message}");
         }
         return 0;
     }
