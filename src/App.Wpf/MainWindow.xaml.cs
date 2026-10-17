@@ -34,7 +34,8 @@ public partial class MainWindow : Window
     {
         // 注意：必须先于 InitializeComponent 创建——XAML 中 CheckBox 的 IsChecked="True"
         // 会在解析阶段立即触发 Checked 事件，其处理器会访问本定时器。
-        _refreshTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
+        // 自动刷新默认关闭（IsChecked="False"），间隔 10s：避免抢焦点/打扰用户选设备。
+        _refreshTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(10) };
 
         InitializeComponent();
         _host = ((App)System.Windows.Application.Current).Host;

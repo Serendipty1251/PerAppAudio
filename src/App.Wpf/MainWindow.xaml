@@ -57,7 +57,7 @@
                         <TextBlock Grid.Column="3"/>
                         <Button Grid.Column="4" Content="刷新" Style="{StaticResource GhostButton}"
                                 Click="RefreshNow_Click" Margin="0,0,8,0"/>
-                        <CheckBox x:Name="AutoRefreshCheck" Grid.Column="5" Content="自动刷新(2s)" IsChecked="True"
+                        <CheckBox x:Name="AutoRefreshCheck" Grid.Column="5" Content="自动刷新(10s)" IsChecked="False"
                                   VerticalAlignment="Center" Checked="AutoRefresh_Changed" Unchecked="AutoRefresh_Changed"/>
                     </Grid>
 
