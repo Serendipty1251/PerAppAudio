@@ -8,8 +8,35 @@
         Height="680" Width="1060" MinHeight="520" MinWidth="880"
         WindowStartupLocation="CenterScreen"
         Icon="app-icon.ico"
+        KeyDown="Window_KeyDown"
         Closing="Window_Closing">
     <DockPanel>
+        <!-- 菜单栏 -->
+        <Menu DockPanel.Dock="Top" Background="{StaticResource SurfaceBrush}" Padding="4,0">
+            <MenuItem Header="_编辑">
+                <MenuItem Header="_刷新" InputGestureText="F5" Click="MenuRefresh_Click"/>
+                <MenuItem Header="_清空日志" Click="MenuClearLog_Click"/>
+            </MenuItem>
+            <MenuItem Header="_工具">
+                <MenuItem Header="重新应用全部路由(_A)" Click="MenuReapplyAll_Click"/>
+                <Separator/>
+                <MenuItem Header="打开路由表文件(_O)" Click="MenuOpenRoutes_Click"/>
+                <MenuItem Header="打开规则文件(_U)" Click="MenuOpenRules_Click"/>
+                <MenuItem Header="打开日志文件(_L)" Click="MenuOpenLog_Click"/>
+            </MenuItem>
+            <MenuItem Header="_窗口">
+                <MenuItem Header="_正在播放" Click="MenuTabPlaying_Click"/>
+                <MenuItem Header="_路由表" Click="MenuTabRoutes_Click"/>
+                <MenuItem Header="_日志" Click="MenuTabLog_Click"/>
+                <Separator/>
+                <MenuItem Header="_最小化到托盘" Click="MenuMinimizeToTray_Click"/>
+            </MenuItem>
+            <MenuItem Header="_帮助">
+                <MenuItem Header="_使用说明" Click="MenuUsage_Click"/>
+                <MenuItem Header="_关于" Click="MenuAbout_Click"/>
+            </MenuItem>
+        </Menu>
+
         <!-- 品牌头部 -->
         <Border DockPanel.Dock="Top" Background="{StaticResource BrandBrush}" Padding="16,10">
             <DockPanel>
@@ -34,7 +61,7 @@
             </StatusBarItem>
         </StatusBar>
 
-        <TabControl Margin="10" Padding="0" BorderThickness="0">
+        <TabControl x:Name="MainTabs" Margin="10" Padding="0" BorderThickness="0">
             <!-- Tab 1：正在播放 -->
             <TabItem Header="正在播放">
                 <DockPanel Margin="8">

@@ -455,6 +455,65 @@ public partial class MainWindow : Window
 
     private void RefreshNow_Click(object sender, RoutedEventArgs e) => Refresh();
 
+    // ---------- 菜单栏 ----------
+
+    private void Window_KeyDown(object sender, System.Windows.Input.KeyEventArgs e)
+    {
+        if (e.Key == System.Windows.Input.Key.F5)
+        {
+            Refresh();
+            e.Handled = true;
+        }
+    }
+
+    private void MenuRefresh_Click(object sender, RoutedEventArgs e) => Refresh();
+
+    private void MenuClearLog_Click(object sender, RoutedEventArgs e) => LogBox.Clear();
+
+    private void MenuReapplyAll_Click(object sender, RoutedEventArgs e) => ReapplyAll_Click(sender, e);
+
+    private void MenuTabPlaying_Click(object sender, RoutedEventArgs e) => MainTabs.SelectedIndex = 0;
+
+    private void MenuTabRoutes_Click(object sender, RoutedEventArgs e) => MainTabs.SelectedIndex = 1;
+
+    private void MenuTabLog_Click(object sender, RoutedEventArgs e) => MainTabs.SelectedIndex = 2;
+
+    private void MenuMinimizeToTray_Click(object sender, RoutedEventArgs e) => Hide();
+
+    private void MenuUsage_Click(object sender, RoutedEventArgs e) => InfoWindow.Usage().ShowDialog();
+
+    private void MenuAbout_Click(object sender, RoutedEventArgs e) => InfoWindow.About().ShowDialog();
+
+    /// <summary>用记事本打开数据文件（路由表 / 规则 / 日志），便于查看与编辑。</summary>
+    private void MenuOpenRoutes_Click(object sender, RoutedEventArgs e)
+        => OpenInNotepad(RouteStore.DefaultPath, "路由表");
+
+    private void MenuOpenRules_Click(object sender, RoutedEventArgs e)
+        => OpenInNotepad(RuleSet.DefaultPath, "规则文件");
+
+    private void MenuOpenLog_Click(object sender, RoutedEventArgs e)
+        => OpenInNotepad(App.LogPath, "日志文件");
+
+    private static void OpenInNotepad(string path, string label)
+    {
+        try
+        {
+            if (!File.Exists(path))
+            {
+                System.Windows.MessageBox.Show($"未找到{label}：\n{path}\n\n（程序尚未生成过该文件）",
+                    "PerAppAudio", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
+            Process.Start(new ProcessStartInfo("notepad.exe", $"\"{path}\"") { UseShellExecute = true });
+        }
+        catch (Exception ex)
+        {
+            System.Windows.MessageBox.Show($"打开{label}失败：{ex.Message}",
+                "PerAppAudio", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+    }
+
     private void ClearLog_Click(object sender, RoutedEventArgs e) => LogBox.Clear();
 
     private void ReapplyAll_Click(object sender, RoutedEventArgs e)

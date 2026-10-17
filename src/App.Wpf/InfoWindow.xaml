@@ -1,0 +1,27 @@
+<Window x:Class="PerAppAudio.App.Wpf.InfoWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="PerAppAudio" Height="360" Width="440"
+        WindowStartupLocation="CenterOwner" ResizeMode="NoResize"
+        ShowInTaskbar="False" Background="{StaticResource SurfaceBrush}">
+    <Grid Margin="24,20">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,14">
+            <Image Source="app-icon.ico" Width="40" Height="40" Margin="0,0,12,0"/>
+            <StackPanel VerticalAlignment="Center">
+                <TextBlock x:Name="TitleText" FontSize="18" FontWeight="SemiBold"/>
+                <TextBlock x:Name="SubtitleText" FontSize="12" Foreground="{StaticResource MutedBrush}" Margin="0,2,0,0"/>
+            </StackPanel>
+        </StackPanel>
+
+        <StackPanel Grid.Row="1" x:Name="BodyPanel"/>
+
+        <Button Grid.Row="2" Content="确定" Style="{StaticResource PrimaryButton}" Padding="24,5"
+                HorizontalAlignment="Center" MinWidth="96" Click="Ok_Click"/>
+    </Grid>
+</Window>
