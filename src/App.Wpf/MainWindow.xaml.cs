@@ -38,10 +38,7 @@ public partial class MainWindow : Window
         InitializeComponent();
         _host = ((App)System.Windows.Application.Current).Host;
 
-        foreach (var d in DeviceManager.EnumerateRenderDevices())
-        {
-            Devices.Add(d.FriendlyName);
-        }
+        SyncDevices();
 
         RouteGrid.ItemsSource = _rows;
         PlayingGrid.ItemsSource = _sessions;
@@ -62,6 +59,44 @@ public partial class MainWindow : Window
     }
 
     // ---------- 展示 ----------
+
+    /// <summary>
+    /// 同步设备下拉列表（构造时 + 每次刷新做一次，支持设备热插拔）。
+    /// 仅在设备集合真的变化时才重建，避免重置 ComboBox 的选中状态。
+    /// </summary>
+    private void SyncDevices()
+    {
+        List<string> names;
+        try
+        {
+            names = DeviceManager.EnumerateRenderDevices().Select(d => d.FriendlyName).ToList();
+        }
+        catch (Exception ex)
+        {
+            AppendLog($"[设备] 枚举失败: {ex.Message}");
+            return;
+        }
+
+        if (names.SequenceEqual(Devices, StringComparer.Ordinal))
+        {
+            return;
+        }
+
+        Devices.Clear();
+        foreach (var n in names)
+        {
+            Devices.Add(n);
+        }
+
+        // 设备被拔掉后选中项失效，回退到第一个设备，避免 null 进入路由
+        foreach (var row in _sessions)
+        {
+            if (string.IsNullOrEmpty(row.DeviceName) || !names.Contains(row.DeviceName, StringComparer.Ordinal))
+            {
+                row.DeviceName = names.Count > 0 ? names[0] : string.Empty;
+            }
+        }
+    }
 
     public void ShowFromTray()
     {
@@ -98,6 +133,8 @@ public partial class MainWindow : Window
 
     private void Refresh()
     {
+        SyncDevices();
+
         var (probeA, probeB2) = _host.Probes;
         ProbeText.Text = $"A: {(probeA.Available ? "可用" : "不可用")}  |  B2: {(probeB2.Available ? "可用" : "不可用")}";
 
@@ -252,6 +289,12 @@ public partial class MainWindow : Window
             return;
         }
 
+        if (string.IsNullOrEmpty(row.DeviceName))
+        {
+            AppendLog("[应用] 未选择输出设备（未检测到渲染设备）");
+            return;
+        }
+
         var device = DeviceManager.ResolveDevice(row.DeviceName);
         string processPath = RouteStore.ResolveProcessPath(row.ProcessId);
 
@@ -332,7 +375,12 @@ public partial class MainWindow : Window
     private static string GetDefaultDevice()
     {
         var devices = DeviceManager.EnumerateRenderDevices();
-        var d = devices.FirstOrDefault(x => x.IsDefaultConsole) ?? devices.FirstOrDefault() ?? devices[0];
+        if (devices.Count == 0)
+        {
+            return string.Empty;
+        }
+
+        var d = devices.FirstOrDefault(x => x.IsDefaultConsole) ?? devices[0];
         return d.FriendlyName;
     }
 

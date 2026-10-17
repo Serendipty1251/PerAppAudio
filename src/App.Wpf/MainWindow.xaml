@@ -83,7 +83,7 @@
                             <DataGridTemplateColumn Header="输出设备" Width="210">
                                 <DataGridTemplateColumn.CellTemplate>
                                     <DataTemplate>
-                                        <ComboBox ItemsSource="{Binding DataContext.Devices, RelativeSource={RelativeSource AncestorType=Window}}"
+                                        <ComboBox ItemsSource="{Binding Devices, RelativeSource={RelativeSource AncestorType=Window}}"
                                                   SelectedItem="{Binding DeviceName, UpdateSourceTrigger=PropertyChanged}" Margin="4,0"/>
                                     </DataTemplate>
                                 </DataGridTemplateColumn.CellTemplate>
@@ -129,7 +129,7 @@
                             <DataGridTemplateColumn Header="目标设备" Width="200">
                                 <DataGridTemplateColumn.CellTemplate>
                                     <DataTemplate>
-                                        <ComboBox ItemsSource="{Binding DataContext.Devices, RelativeSource={RelativeSource AncestorType=Window}}"
+                                        <ComboBox ItemsSource="{Binding Devices, RelativeSource={RelativeSource AncestorType=Window}}"
                                                   SelectedItem="{Binding DeviceName, UpdateSourceTrigger=PropertyChanged}"
                                                   SelectionChanged="Device_Changed" Margin="4,0"/>
                                     </DataTemplate>
