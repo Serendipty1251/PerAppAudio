@@ -106,7 +106,7 @@ public partial class App : System.Windows.Application
             if (Hotkeys is { } hk)
             {
                 var (ok, failed) = hk.RegisterAll(Settings);
-                string msg = $"[热键] 已注册 {ok}/5";
+                string msg = $"[热键] 已注册 {ok}/6";
                 if (failed.Count > 0)
                 {
                     msg += "，失败：" + string.Join("、", failed);
@@ -119,6 +119,21 @@ public partial class App : System.Windows.Application
         {
             Hotkeys = null;
             _window.AppendLog($"[热键] 注册失败: {ex.Message}");
+        }
+
+        // 托盘面板自测模式：沙箱禁合成输入（SendInput 被丢弃），无法用键鼠驱动 UI，
+        // 用环境变量触发「打开→行点击→静音→场景→关闭」全链路自测。
+        if (Environment.GetEnvironmentVariable("PERAPPAUDIO_TEST_FLYOUT") == "1")
+        {
+            AppendFileLog("[自测] PERAPPAUDIO_TEST_FLYOUT=1：2 秒后打开托盘面板并自测");
+            var testTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
+            testTimer.Tick += (_, _) =>
+            {
+                testTimer.Stop();
+                TrayFlyoutWindow.ShowAtTray();
+                TrayFlyoutWindow.RunSelfTest();
+            };
+            testTimer.Start();
         }
 
         _ = _host.StartAsync();
@@ -148,6 +163,14 @@ public partial class App : System.Windows.Application
             Text = "PerAppAudio 每应用音频路由",
             Visible = true,
             ContextMenuStrip = _trayMenu,
+        };
+        // 左键单击：弹出快捷面板（正在播放/场景/退出）；双击仍走主窗口
+        _tray.MouseClick += (_, e) =>
+        {
+            if (e.Button == WinForms.MouseButtons.Left)
+            {
+                TrayFlyoutWindow.ShowAtTray();
+            }
         };
         _tray.DoubleClick += (_, _) => ShowMainWindow();
     }

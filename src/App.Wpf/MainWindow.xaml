@@ -249,6 +249,7 @@
                                 <RowDefinition Height="Auto"/>
                                 <RowDefinition Height="Auto"/>
                                 <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
                             </Grid.RowDefinitions>
                             <TextBlock Grid.Row="0" Grid.Column="0" Text="切换下一个输出设备:" VerticalAlignment="Center" Margin="0,4"/>
                             <TextBox Grid.Row="0" Grid.Column="1" x:Name="HotkeyNextOutputBox" Margin="0,2"/>
@@ -260,6 +261,8 @@
                             <TextBox Grid.Row="3" Grid.Column="1" x:Name="HotkeyMuteBox" Margin="0,2"/>
                             <TextBlock Grid.Row="4" Grid.Column="0" Text="显示主窗口:" VerticalAlignment="Center" Margin="0,4"/>
                             <TextBox Grid.Row="4" Grid.Column="1" x:Name="HotkeyShowWindowBox" Margin="0,2"/>
+                            <TextBlock Grid.Row="5" Grid.Column="0" Text="打开托盘面板:" VerticalAlignment="Center" Margin="0,4"/>
+                            <TextBox Grid.Row="5" Grid.Column="1" x:Name="HotkeyShowFlyoutBox" Margin="0,2"/>
                         </Grid>
                         <Button Content="应用热键" Style="{StaticResource PrimaryButton}" HorizontalAlignment="Left"
                                 Margin="0,10,0,0" Click="ApplyHotkeys_Click"/>

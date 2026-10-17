@@ -103,15 +103,26 @@ public partial class MainWindow : Window
 
         var names = _onlineDevices.Concat(offlineTargets).ToList();
 
-        if (names.SequenceEqual(Devices, StringComparer.Ordinal))
+        // 集合比较（忽略顺序）：COM 设备枚举顺序可能抖动，顺序敏感比较会误判「有变化」，
+        // 导致每次刷新都重建列表。仅顺序不同时直接返回，不碰集合。
+        var current = Devices.ToList();
+        bool sameSet = current.Count == names.Count
+            && !names.Except(current, StringComparer.Ordinal).Any();
+        if (sameSet)
         {
             return;
         }
 
-        Devices.Clear();
-        foreach (var n in names)
+        // 增量更新：只删消失项、追加新增项，绝不 Clear()。
+        // WPF 对「未选中项」的增删不会关闭已打开的下拉弹窗；而 Clear() 会瞬间清空
+        // 打开中的下拉框——这就是「未选择时选项消失」的直接根因。
+        foreach (var gone in current.Where(n => !names.Contains(n, StringComparer.Ordinal)).ToList())
         {
-            Devices.Add(n);
+            Devices.Remove(gone);
+        }
+        foreach (var add in names.Where(n => !current.Contains(n, StringComparer.Ordinal)))
+        {
+            Devices.Add(add);
         }
 
         AppendLog($"[设备] 在线 {_onlineDevices.Count} 个；路由目标离线 {offlineTargets.Count} 个" +
@@ -507,6 +518,7 @@ public partial class MainWindow : Window
                 case HotkeyManager.IdVolumeDown: HotkeyVolume(-0.05f); break;
                 case HotkeyManager.IdMute: HotkeyMuteToggle(); break;
                 case HotkeyManager.IdShowWindow: ShowFromTray(); break;
+                case HotkeyManager.IdShowFlyout: TrayFlyoutWindow.ShowAtTray(); break;
             }
         });
     }
@@ -527,7 +539,7 @@ public partial class MainWindow : Window
     }
 
     /// <summary>把前台应用的音频送到下一个在线输出设备（循环），并写入持久路由。</summary>
-    private void HotkeyNextOutput()
+    private async void HotkeyNextOutput()
     {
         var fg = ForegroundApp();
         if (fg is null)
@@ -537,53 +549,18 @@ public partial class MainWindow : Window
         }
 
         var (pid, name) = fg.Value;
-        bool hasSession = WasapiSessionSource.EnumerateSessions().Any(s => s.ProcessId == pid);
-        if (!hasSession)
+        try
         {
-            Osd($"{name} 没有音频会话（先让它播放一次声音）", "⚠️");
-            return;
+            var result = await SessionActions.CycleToNextDeviceAsync(_host, pid, name);
+            LogBoth($"[热键] {result.Detail}");
+            Osd(result.Message, result.Success ? "🔊" : "⚠️");
+        }
+        catch (Exception ex)
+        {
+            LogBoth($"[热键] {name} 切换设备失败: {ex.Message}");
+            Osd("切换设备失败", "⚠️");
         }
 
-        var online = DeviceManager.EnumerateRenderDevices(DeviceState.Active);
-        if (online.Count == 0)
-        {
-            Osd("没有在线输出设备", "⚠️");
-            return;
-        }
-
-        string current = WasapiSessionSource.GetDeviceOfProcesses()
-            .TryGetValue(pid, out var cur) ? cur : string.Empty;
-        int idx = -1;
-        for (int i = 0; i < online.Count; i++)
-        {
-            if (string.Equals(online[i].FriendlyName, current, StringComparison.OrdinalIgnoreCase))
-            {
-                idx = i;
-                break;
-            }
-        }
-        var next = online[(idx + 1) % online.Count];
-
-        float vol = WasapiSessionSource.GetSessionVolumeStates(pid).FirstOrDefault()?.Volume ?? 1f;
-        string processPath = RouteStore.ResolveProcessPath(pid);
-        var device = DeviceManager.ResolveDevice(next.FriendlyName);
-
-        var command = new RoutingCommand(pid, processPath,
-            new AudioDeviceRef(device.FriendlyName, device.Id), vol, false);
-        var report = _host.Coordinator.ApplyRouteAsync(command, RoutingMode.Auto).GetAwaiter().GetResult();
-
-        _host.Store.Upsert(new StoredRoute
-        {
-            ProcessPath = processPath,
-            DeviceId = device.Id,
-            DeviceName = device.FriendlyName,
-            Mode = RoutingMode.Auto,
-            Volume = vol,
-        });
-
-        LogBoth($"[热键] {name}（PID {pid}）→ {device.FriendlyName} | " +
-            $"B2 {(report.EndpointApplied ? "✅" : "❌")} A {(report.LoopbackActive ? "✅" : "❌")}");
-        Osd($"{name} → {device.FriendlyName}", report.Success ? "🔊" : "⚠️");
         RefreshThreadSafe();
     }
 
@@ -598,17 +575,16 @@ public partial class MainWindow : Window
         }
 
         var (pid, name) = fg.Value;
-        var states = WasapiSessionSource.GetSessionVolumeStates(pid);
-        if (states.Count == 0)
+        var r = SessionActions.NudgeVolume(pid, delta);
+        if (r is null)
         {
             Osd($"{name} 没有音频会话", "⚠️");
             return;
         }
 
-        float next = Math.Clamp((float)Math.Round(states[0].Volume + delta, 2), 0f, 1f);
-        int affected = WasapiSessionSource.ApplySessionControl(pid, volume: next);
-        LogBoth($"[热键] {name} 音量 {states[0].Volume:F2} → {next:F2}（{affected} 个会话）");
-        Osd($"{name} 音量 {next:P0}", next == 0 ? "🔇" : "🔊");
+        var (before, after, affected) = r.Value;
+        LogBoth($"[热键] {name} 音量 {before:F2} → {after:F2}（{affected} 个会话）");
+        Osd($"{name} 音量 {after:P0}", after == 0 ? "🔇" : "🔊");
     }
 
     /// <summary>前台应用静音切换。</summary>
@@ -622,17 +598,16 @@ public partial class MainWindow : Window
         }
 
         var (pid, name) = fg.Value;
-        var states = WasapiSessionSource.GetSessionVolumeStates(pid);
-        if (states.Count == 0)
+        var r = SessionActions.ToggleMute(pid);
+        if (r is null)
         {
             Osd($"{name} 没有音频会话", "⚠️");
             return;
         }
 
-        bool nowMuted = !states[0].Muted;
-        WasapiSessionSource.ApplySessionControl(pid, mute: nowMuted);
-        LogBoth($"[热键] {name} {(nowMuted ? "静音" : "取消静音")}");
-        Osd($"{name} {(nowMuted ? "已静音" : "已取消静音")}", nowMuted ? "🔇" : "🔊");
+        var (muted, affected) = r.Value;
+        LogBoth($"[热键] {name} {(muted ? "静音" : "取消静音")}（{affected} 个会话）");
+        Osd($"{name} {(muted ? "已静音" : "已取消静音")}", muted ? "🔇" : "🔊");
     }
 
     // ---------- 菜单栏 ----------
@@ -766,6 +741,7 @@ public partial class MainWindow : Window
             HotkeyVolumeDownBox.Text = _settings.HotkeyVolumeDown;
             HotkeyMuteBox.Text = _settings.HotkeyMute;
             HotkeyShowWindowBox.Text = _settings.HotkeyShowWindow;
+            HotkeyShowFlyoutBox.Text = _settings.HotkeyShowFlyout;
         }
         finally
         {
@@ -818,6 +794,7 @@ public partial class MainWindow : Window
         _settings.HotkeyVolumeDown = HotkeyVolumeDownBox.Text.Trim();
         _settings.HotkeyMute = HotkeyMuteBox.Text.Trim();
         _settings.HotkeyShowWindow = HotkeyShowWindowBox.Text.Trim();
+        _settings.HotkeyShowFlyout = HotkeyShowFlyoutBox.Text.Trim();
         _settings.Save();
 
         if (App.Hotkeys is { } hotkeys)
@@ -920,6 +897,11 @@ public sealed class RouteRow : INotifyPropertyChanged
         get => _route.DeviceName;
         set
         {
+            // 同 SessionRow：忽略 null/空回写，防止设备列表更新瞬间选中值被清掉
+            if (string.IsNullOrEmpty(value))
+            {
+                return;
+            }
             _route.DeviceName = value;
             OnPropertyChanged();
         }
@@ -982,7 +964,18 @@ public sealed class SessionRow : INotifyPropertyChanged
     public string DeviceName
     {
         get => _deviceName;
-        set { _deviceName = value; OnPropertyChanged(); OnPropertyChanged(nameof(CanApply)); }
+        set
+        {
+            // 防御绑定回写 null/空：设备列表增量更新的瞬间 SelectedItem 可能被置 null，
+            // 若回写会清空用户已选设备（表现为「未选择时选项/选中消失」）。空值一律忽略。
+            if (string.IsNullOrEmpty(value))
+            {
+                return;
+            }
+            _deviceName = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(CanApply));
+        }
     }
 
     private float _volume = 1f;
