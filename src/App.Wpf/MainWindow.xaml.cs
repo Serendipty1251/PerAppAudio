@@ -24,7 +24,10 @@ public partial class MainWindow : Window
     private readonly DispatcherTimer _refreshTimer;
     private readonly ObservableCollection<RouteRow> _rows = new();
     private readonly ObservableCollection<SessionRow> _sessions = new();
+    private readonly ObservableCollection<LiveRouteRow> _liveRows = new();
+    private readonly ObservableCollection<LogEntry> _logEntries = new();
     private System.ComponentModel.ICollectionView? _sessionView;
+    private System.ComponentModel.ICollectionView? _logView;
     private bool _allowClose;
     private List<string> _onlineDevices = new();
     private AppSettings _settings = AppSettings.Load();
@@ -44,10 +47,12 @@ public partial class MainWindow : Window
 
         RouteGrid.ItemsSource = _rows;
         PlayingGrid.ItemsSource = _sessions;
+        LiveGrid.ItemsSource = _liveRows;
         ProfileBox.ItemsSource = _host.Rules.Profiles.Select(p => p.Name).ToList();
 
         _host.Log += AppendLogThreadSafe;
         _host.RoutesChanged += RefreshThreadSafe;
+        _host.DeviceListChanged += RefreshThreadSafe;
 
         _refreshTimer.Tick += (_, _) => Refresh();
 
@@ -59,6 +64,9 @@ public partial class MainWindow : Window
         _sessionView = System.Windows.Data.CollectionViewSource.GetDefaultView(_sessions);
         _sessionView.Filter = SessionFilter;
 
+        _logView = System.Windows.Data.CollectionViewSource.GetDefaultView(_logEntries);
+        _logView.Filter = LogFilter;
+        LogList.ItemsSource = _logEntries;
         LoadSettingsPage();
 
         Loaded += (_, _) => { RestoreWindowGeometry(); Refresh(); };
@@ -74,12 +82,11 @@ public partial class MainWindow : Window
     /// </summary>
     private void SyncDevices()
     {
+        List<WasapiDevice> all;
         List<WasapiDevice> online;
-        List<string> allNames;
         try
         {
-            var all = DeviceManager.EnumerateRenderDevices();
-            allNames = all.Select(d => d.FriendlyName).ToList();
+            all = DeviceManager.EnumerateRenderDevices().ToList();
             online = all.Where(d => d.State == DeviceState.Active).ToList();
         }
         catch (Exception ex)
@@ -90,18 +97,21 @@ public partial class MainWindow : Window
 
         _onlineDevices = online.Select(d => d.FriendlyName).ToList();
 
-        // 持久路由指向的离线目标：仍追加进下拉列表（裸名，保证 SelectedItem 能匹配，
-        // 防止 ItemsSource 重建把选中值冲成 null 丢数据）。B2 持久化对离线设备同样
+        // 持久路由指向的离线目标：仍追加进下拉列表（保证 SelectedItem 能匹配，
+        // 防止列表重建把选中值冲成 null 丢数据）。B2 持久化对离线设备同样
         // 有效——设备回归后看门狗自动重挂，所以这些目标必须保持可见可选。
-        var offlineTargets = _host.Store.Routes
-            .Select(r => r.DeviceName)
-            .Where(n => !string.IsNullOrEmpty(n)
-                && !_onlineDevices.Contains(n, StringComparer.Ordinal)
-                && allNames.Contains(n, StringComparer.Ordinal))
-            .Distinct(StringComparer.Ordinal)
+        var offlineTargets = all
+            .Where(d => d.State != DeviceState.Active
+                && _host.Store.Routes.Any(r => string.Equals(r.DeviceName, d.FriendlyName, StringComparison.OrdinalIgnoreCase)))
             .ToList();
 
-        var names = _onlineDevices.Concat(offlineTargets).ToList();
+        // 可见设备 = 在线 + 离线路由目标。同名端点在此集合内去歧义（追加 ID 尾段），
+        // 仅影响展示：下拉框/「当前设备」列经 DeviceNameConverter 显示，存储与解析仍用裸名。
+        var visible = online.Concat(offlineTargets).ToList();
+        DeviceNaming.Refresh(visible);
+
+        var names = visible.Select(d => DeviceNaming.Display(d.FriendlyName)).ToList();
+        var bareNames = visible.Select(d => d.FriendlyName).ToList();
 
         // 集合比较（忽略顺序）：COM 设备枚举顺序可能抖动，顺序敏感比较会误判「有变化」，
         // 导致每次刷新都重建列表。仅顺序不同时直接返回，不碰集合。
@@ -136,7 +146,7 @@ public partial class MainWindow : Window
             ?? string.Empty;
         foreach (var row in _sessions)
         {
-            if (string.IsNullOrEmpty(row.DeviceName) || !names.Contains(row.DeviceName, StringComparer.Ordinal))
+            if (string.IsNullOrEmpty(row.DeviceName) || !bareNames.Contains(row.DeviceName, StringComparer.Ordinal))
             {
                 row.DeviceName = fallback;
             }
@@ -163,10 +173,17 @@ public partial class MainWindow : Window
 
     public void AppendLog(string line)
     {
-        LogBox.AppendText(line + Environment.NewLine);
+        _logEntries.Add(new LogEntry(DateTime.Now.ToString("HH:mm:ss"), line, LogEntry.Classify(line)));
+
+        // 上限 2000 条：看门狗/刷新高频写日志，防止长跑内存无限增长
+        while (_logEntries.Count > 2000)
+        {
+            _logEntries.RemoveAt(0);
+        }
+
         if (AutoScrollCheck?.IsChecked != false)
         {
-            LogBox.ScrollToEnd();
+            LogList.ScrollIntoView(_logEntries[^1]);
         }
     }
 
@@ -226,7 +243,62 @@ public partial class MainWindow : Window
         // 「正在播放」列表：会话枚举（NAudio，真实 PID）+ 保留用户选择
         RefreshPlayingSessions();
 
+        // 活动链路列表
+        RefreshLiveLinks();
+
         StatusText.Text = $"v0.4  ·  路由表 {_host.Store.Routes.Count} 条  |  活动链路 {live.Count} 条  |  日志 {App.LogPath}";
+    }
+
+    /// <summary>刷新「活动链路」页：直接重建（行数少，状态每次刷新都变）。</summary>
+    private void RefreshLiveLinks()
+    {
+        _liveRows.Clear();
+        foreach (var l in _host.Coordinator.GetLiveRoutes()
+            .OrderByDescending(l => l.LoopbackActive)
+            .ThenBy(l => l.ProcessId))
+        {
+            _liveRows.Add(new LiveRouteRow
+            {
+                ProcessId = l.ProcessId,
+                ProcessName = string.IsNullOrEmpty(Path.GetFileName(l.ProcessPath)) ? $"PID {l.ProcessId}" : Path.GetFileName(l.ProcessPath),
+                DeviceName = l.TargetDevice,
+                ModeText = l.Mode switch
+                {
+                    RoutingMode.Loopback => "a",
+                    RoutingMode.Endpoint => "b",
+                    _ => "auto",
+                },
+                LoopbackText = l.LoopbackActive ? (l.AwaitingDevice ? "暂停(等设备)" : "✅ 运行中") : "—",
+                EndpointText = l.EndpointApplied ? "✅ 已写" : "—",
+                AppliedAtText = l.AppliedAt.ToString("HH:mm:ss"),
+            });
+        }
+
+        LiveEmptyHint.Visibility = _liveRows.Count == 0
+            ? System.Windows.Visibility.Visible
+            : System.Windows.Visibility.Collapsed;
+    }
+
+    /// <summary>「断开」：拆除单条活动链路（A + B2 覆盖），保留路由表记录。</summary>
+    private async void BreakLink_Click(object sender, RoutedEventArgs e)
+    {
+        if ((sender as FrameworkElement)?.DataContext is not LiveRouteRow row)
+        {
+            return;
+        }
+
+        try
+        {
+            var result = await _host.Coordinator.RemoveRouteAsync(row.ProcessId, clearEndpoint: true);
+            AppendLog($"[断开] {row.ProcessName}（PID {row.ProcessId}）：{result.Message}");
+            App.AppendFileLog($"[断开] {row.ProcessName}（PID {row.ProcessId}）：{result.Message}");
+        }
+        catch (Exception ex)
+        {
+            AppendLog($"[断开] {row.ProcessName} 失败: {ex.Message}");
+        }
+
+        Refresh();
     }
 
     // ---------- 路由行操作 ----------
@@ -306,7 +378,7 @@ public partial class MainWindow : Window
         PersistRow(row);
     }
 
-    private void Remove_Click(object sender, RoutedEventArgs e)
+    private async void Remove_Click(object sender, RoutedEventArgs e)
     {
         var row = RowFromSender(sender);
         if (row is null)
@@ -314,16 +386,20 @@ public partial class MainWindow : Window
             return;
         }
 
+        // 双保险拆链：①按进程路径匹配所有活动路由（路径解析不一致也能拆到）；
+        // ②再对运行中的匹配进程逐个拆（覆盖 _live 之外的存量链路）。
+        int torn = await _host.Coordinator.RemoveRoutesByPathAsync(row.Route.ProcessPath);
         foreach (var process in ProcessFinder.Find(row.Route.ProcessPath))
         {
             using (process)
             {
-                _host.Coordinator.RemoveRouteAsync(process.Id, clearEndpoint: true).GetAwaiter().GetResult();
+                await _host.Coordinator.RemoveRouteAsync(process.Id, clearEndpoint: true);
             }
         }
+
         _host.Store.Remove(row.Route.ProcessPath);
         _rows.Remove(row);
-        AppendLog($"[移除] {row.ProcessName}");
+        AppendLog($"[移除] {row.ProcessName}（拆除活动链路 {torn} 条）");
         Refresh();
     }
 
@@ -623,7 +699,7 @@ public partial class MainWindow : Window
 
     private void MenuRefresh_Click(object sender, RoutedEventArgs e) => Refresh();
 
-    private void MenuClearLog_Click(object sender, RoutedEventArgs e) => LogBox.Clear();
+    private void MenuClearLog_Click(object sender, RoutedEventArgs e) => ClearLog_Click(sender, e);
 
     private void MenuReapplyAll_Click(object sender, RoutedEventArgs e) => ReapplyAll_Click(sender, e);
 
@@ -631,7 +707,9 @@ public partial class MainWindow : Window
 
     private void MenuTabRoutes_Click(object sender, RoutedEventArgs e) => MainTabs.SelectedIndex = 1;
 
-    private void MenuTabLog_Click(object sender, RoutedEventArgs e) => MainTabs.SelectedIndex = 2;
+    private void MenuTabLive_Click(object sender, RoutedEventArgs e) => MainTabs.SelectedIndex = 2;
+
+    private void MenuTabLog_Click(object sender, RoutedEventArgs e) => MainTabs.SelectedIndex = 3;
 
     private void MenuMinimizeToTray_Click(object sender, RoutedEventArgs e) => Hide();
 
@@ -673,7 +751,11 @@ public partial class MainWindow : Window
         }
     }
 
-    private void ClearLog_Click(object sender, RoutedEventArgs e) => LogBox.Clear();
+    private void ClearLog_Click(object sender, RoutedEventArgs e)
+    {
+        _logEntries.Clear();
+        _logView?.Refresh();
+    }
 
     private void ReapplyAll_Click(object sender, RoutedEventArgs e)
     {
@@ -716,6 +798,39 @@ public partial class MainWindow : Window
 
         return row.ProcessName.Contains(text, StringComparison.OrdinalIgnoreCase)
             || row.DisplayName.Contains(text, StringComparison.OrdinalIgnoreCase);
+    }
+
+    // ---------- 日志页 ----------
+
+    private void LogSearch_TextChanged(object sender, TextChangedEventArgs e) => _logView?.Refresh();
+
+    private void LogLevel_Changed(object sender, SelectionChangedEventArgs e) => _logView?.Refresh();
+
+    /// <summary>日志过滤：搜索文本 + 级别下拉（全部/信息/警告/错误）。</summary>
+    private bool LogFilter(object item)
+    {
+        if (item is not LogEntry entry)
+        {
+            return false;
+        }
+
+        int level = LogLevelBox?.SelectedIndex ?? 0;
+        if (level == 1 && entry.Level != LogLevel.Info)
+        {
+            return false;
+        }
+        if (level == 2 && entry.Level != LogLevel.Warn)
+        {
+            return false;
+        }
+        if (level == 3 && entry.Level != LogLevel.Error)
+        {
+            return false;
+        }
+
+        string text = LogSearchBox?.Text?.Trim() ?? string.Empty;
+        return string.IsNullOrEmpty(text)
+            || entry.Text.Contains(text, StringComparison.OrdinalIgnoreCase);
     }
 
     // ---------- 设置页 ----------
@@ -951,6 +1066,44 @@ public sealed class RouteRow : INotifyPropertyChanged
 
     private void OnPropertyChanged([CallerMemberName] string? name = null) =>
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
+}
+
+/// <summary>「活动链路」行：Coordinator 持有中的实时路由快照。</summary>
+public sealed class LiveRouteRow
+{
+    public int ProcessId { get; init; }
+    public string ProcessName { get; init; } = string.Empty;
+    public string DeviceName { get; init; } = string.Empty;
+    public string ModeText { get; init; } = "auto";
+    public string LoopbackText { get; init; } = "—";
+    public string EndpointText { get; init; } = "—";
+    public string AppliedAtText { get; init; } = string.Empty;
+}
+
+/// <summary>日志级别（由内容自动分类：[严重]/❌=错误，⚠️/失败=警告，其余=信息）。</summary>
+public enum LogLevel
+{
+    Info,
+    Warn,
+    Error,
+}
+
+/// <summary>日志行（时间 + 原文 + 级别），供日志页搜索/级别过滤。</summary>
+public sealed record LogEntry(string Time, string Text, LogLevel Level)
+{
+    public static LogLevel Classify(string line) =>
+        line.Contains("[严重]", StringComparison.Ordinal) || line.Contains('❌')
+            ? LogLevel.Error
+            : line.Contains('⚠') || line.Contains("失败", StringComparison.Ordinal)
+                ? LogLevel.Warn
+                : LogLevel.Info;
+
+    public System.Windows.Media.Brush LevelBrush => Level switch
+    {
+        LogLevel.Error => System.Windows.Media.Brushes.IndianRed,
+        LogLevel.Warn => System.Windows.Media.Brushes.DarkOrange,
+        _ => System.Windows.Media.Brushes.Black,
+    };
 }
 
 /// <summary>「正在播放」会话行（自动检测列表）。</summary>

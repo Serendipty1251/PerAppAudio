@@ -186,6 +186,38 @@ public sealed class RoutingCoordinator : IDisposable
         return new RoutingResult(success, RoutingMode.Auto, message);
     }
 
+    /// <summary>
+    /// 按进程路径拆除所有活动路由（路由表删除时的兜底）：
+    /// UI 删除记录原先只对 ProcessFinder 能找到的进程拆链，路径解析不一致时会残留
+    /// 活动 A 链路。此处按「完整路径或文件名」匹配 _live，无论进程是否还在跑都拆。
+    /// </summary>
+    public async Task<int> RemoveRoutesByPathAsync(string processPath, bool clearEndpoint = true, CancellationToken ct = default)
+    {
+        if (string.IsNullOrEmpty(processPath))
+        {
+            return 0;
+        }
+
+        string fileName = Path.GetFileName(processPath);
+        List<int> pids;
+        lock (_gate)
+        {
+            pids = _live.Values
+                .Where(r => string.Equals(r.Command.ProcessPath, processPath, StringComparison.OrdinalIgnoreCase)
+                    || (!string.IsNullOrEmpty(fileName)
+                        && string.Equals(Path.GetFileName(r.Command.ProcessPath), fileName, StringComparison.OrdinalIgnoreCase)))
+                .Select(r => r.Command.ProcessId)
+                .ToList();
+        }
+
+        foreach (int pid in pids)
+        {
+            await RemoveRouteAsync(pid, clearEndpoint, ct).ConfigureAwait(false);
+        }
+
+        return pids.Count;
+    }
+
     /// <summary>启动看门狗（进程退出拆除 / 设备消失暂停 / 设备回归重挂）。</summary>
     public void StartWatchdog(int intervalMs = 2000)
     {

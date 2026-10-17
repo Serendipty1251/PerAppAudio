@@ -18,6 +18,7 @@ public sealed class AppHost : IDisposable
     private readonly Mutex? _instanceMutex;
     private CancellationTokenSource? _cts;
     private Task? _scanLoop;
+    private DeviceEventService? _deviceEvents;
     private volatile bool _disposed;
 
     private BackendProbeResult _probeA = new(false, "未探测");
@@ -34,6 +35,12 @@ public sealed class AppHost : IDisposable
 
     /// <summary>路由集合变化（扫描应用了新路由 / 看门狗拆除）。</summary>
     public event Action? RoutesChanged;
+
+    /// <summary>设备集合变化（插拔/状态变化；UI 立即刷新设备下拉用）。</summary>
+    public event Action? DeviceListChanged;
+
+    /// <summary>设备事件触发器（StartAsync 后可用；设备事件 → rules.yaml 场景联动）。</summary>
+    public DeviceEventService? DeviceEvents => _deviceEvents;
 
     private AppHost(RouteStore store, Mutex mutex)
     {
@@ -71,6 +78,13 @@ public sealed class AppHost : IDisposable
 
         _coordinator.StartWatchdog(scanIntervalMs);
         Log?.Invoke($"[看门狗] 已启动（{scanIntervalMs} ms）：进程退出拆 A / 设备消失暂停 / 设备回归重挂");
+
+        // 设备事件触发器：插拔/状态/默认设备变更 → rules.yaml 的 device_events 规则
+        _deviceEvents = new DeviceEventService(_coordinator, _store);
+        _deviceEvents.Log += msg => Log?.Invoke(msg);
+        _deviceEvents.RoutesChanged += () => RoutesChanged?.Invoke();
+        _deviceEvents.DevicesChanged += () => DeviceListChanged?.Invoke();
+        _deviceEvents.Start();
 
         _cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         _scanLoop = Task.Run(() => ScanLoopAsync(_cts.Token));
@@ -156,6 +170,7 @@ public sealed class AppHost : IDisposable
         }
 
         _coordinator.Dispose();
+        _deviceEvents?.Dispose();
         _cts?.Dispose();
         _instanceMutex?.ReleaseMutex();
         _instanceMutex?.Dispose();

@@ -69,9 +69,9 @@ public static class SessionActions
             Volume = vol,
         });
 
-        string detail = $"{appName}（PID {pid}）→ {next.FriendlyName} | " +
+        string detail = $"{appName}（PID {pid}）→ {DeviceNaming.Display(next.FriendlyName)} | " +
             $"B2 {(report.EndpointApplied ? "✅" : "❌")} A {(report.LoopbackActive ? "✅" : "❌")}";
-        return new Result($"{appName} → {next.FriendlyName}", detail, report.Success);
+        return new Result($"{appName} → {DeviceNaming.Display(next.FriendlyName)}", detail, report.Success);
     }
 
     /// <summary>
