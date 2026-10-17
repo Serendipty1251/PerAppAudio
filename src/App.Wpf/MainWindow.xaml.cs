@@ -26,6 +26,7 @@ public partial class MainWindow : Window
     private readonly ObservableCollection<SessionRow> _sessions = new();
     private System.ComponentModel.ICollectionView? _sessionView;
     private bool _allowClose;
+    private List<string> _onlineDevices = new();
 
     public ObservableCollection<string> Devices { get; } = new();
 
@@ -66,16 +67,34 @@ public partial class MainWindow : Window
     /// </summary>
     private void SyncDevices()
     {
-        List<string> names;
+        List<WasapiDevice> online;
+        List<string> allNames;
         try
         {
-            names = DeviceManager.EnumerateRenderDevices().Select(d => d.FriendlyName).ToList();
+            var all = DeviceManager.EnumerateRenderDevices();
+            allNames = all.Select(d => d.FriendlyName).ToList();
+            online = all.Where(d => d.State == DeviceState.Active).ToList();
         }
         catch (Exception ex)
         {
             AppendLog($"[设备] 枚举失败: {ex.Message}");
             return;
         }
+
+        _onlineDevices = online.Select(d => d.FriendlyName).ToList();
+
+        // 持久路由指向的离线目标：仍追加进下拉列表（裸名，保证 SelectedItem 能匹配，
+        // 防止 ItemsSource 重建把选中值冲成 null 丢数据）。B2 持久化对离线设备同样
+        // 有效——设备回归后看门狗自动重挂，所以这些目标必须保持可见可选。
+        var offlineTargets = _host.Store.Routes
+            .Select(r => r.DeviceName)
+            .Where(n => !string.IsNullOrEmpty(n)
+                && !_onlineDevices.Contains(n, StringComparer.Ordinal)
+                && allNames.Contains(n, StringComparer.Ordinal))
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+
+        var names = _onlineDevices.Concat(offlineTargets).ToList();
 
         if (names.SequenceEqual(Devices, StringComparer.Ordinal))
         {
@@ -88,12 +107,20 @@ public partial class MainWindow : Window
             Devices.Add(n);
         }
 
-        // 设备被拔掉后选中项失效，回退到第一个设备，避免 null 进入路由
+        AppendLog($"[设备] 在线 {_onlineDevices.Count} 个；路由目标离线 {offlineTargets.Count} 个" +
+            (offlineTargets.Count > 0 ? $"（{string.Join("、", offlineTargets)}）" : ""));
+        App.AppendFileLog($"[设备] 在线 {_onlineDevices.Count} 个；路由目标离线 {offlineTargets.Count} 个" +
+            (offlineTargets.Count > 0 ? $"（{string.Join("、", offlineTargets)}）" : ""));
+
+        // 在线列表变化后选中项可能失效：正在播放行回退到默认在线设备，避免 null 进入路由
+        var fallback = online.FirstOrDefault(d => d.IsDefaultConsole)?.FriendlyName
+            ?? online.FirstOrDefault()?.FriendlyName
+            ?? string.Empty;
         foreach (var row in _sessions)
         {
             if (string.IsNullOrEmpty(row.DeviceName) || !names.Contains(row.DeviceName, StringComparer.Ordinal))
             {
-                row.DeviceName = names.Count > 0 ? names[0] : string.Empty;
+                row.DeviceName = fallback;
             }
         }
     }
@@ -133,12 +160,12 @@ public partial class MainWindow : Window
 
     private void Refresh()
     {
+        _host.Store.Load();
         SyncDevices();
 
         var (probeA, probeB2) = _host.Probes;
         ProbeText.Text = $"A: {(probeA.Available ? "可用" : "不可用")}  |  B2: {(probeB2.Available ? "可用" : "不可用")}";
 
-        _host.Store.Load();
         var live = _host.Coordinator.GetLiveRoutes();
 
         // 路由表 → 行（保留已有行的输入状态，仅更新数据）
@@ -161,11 +188,14 @@ public partial class MainWindow : Window
             var routeLive = live.FirstOrDefault(l =>
                 string.Equals(l.ProcessPath, stored.ProcessPath, StringComparison.OrdinalIgnoreCase) ||
                 string.Equals(Path.GetFileName(l.ProcessPath), Path.GetFileName(stored.ProcessPath), StringComparison.OrdinalIgnoreCase));
-            string status = routeLive.ProcessId == 0
-                ? "等待启动"
-                : routeLive.LoopbackActive
-                    ? (routeLive.EndpointApplied ? "A+B2 ✅" : "A ✅")
-                    : (routeLive.EndpointApplied ? "B2 ✅" : "…");
+            bool deviceOnline = _onlineDevices.Contains(stored.DeviceName, StringComparer.Ordinal);
+            string status = !deviceOnline
+                ? "设备离线"
+                : routeLive.ProcessId == 0
+                    ? "等待启动"
+                    : routeLive.LoopbackActive
+                        ? (routeLive.EndpointApplied ? "A+B2 ✅" : "A ✅")
+                        : (routeLive.EndpointApplied ? "B2 ✅" : "…");
             row.Status = status;
         }
 
@@ -374,7 +404,8 @@ public partial class MainWindow : Window
 
     private static string GetDefaultDevice()
     {
-        var devices = DeviceManager.EnumerateRenderDevices();
+        // 只从在线设备里选默认：幽灵端点（NotPresent/Unplugged）不能作为默认输出
+        var devices = DeviceManager.EnumerateRenderDevices(DeviceState.Active);
         if (devices.Count == 0)
         {
             return string.Empty;

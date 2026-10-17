@@ -22,6 +22,20 @@ public partial class App : System.Windows.Application
 
     public AppHost Host => _host ?? throw new InvalidOperationException("AppHost 未初始化");
 
+    /// <summary>UI 侧日志直写文件（与 Log 事件落盘同一格式；供 MainWindow 等无 Log 事件访问权的组件用）。</summary>
+    public static void AppendFileLog(string line)
+    {
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(LogPath)!);
+            File.AppendAllText(LogPath, $"{DateTime.Now:HH:mm:ss} {line}{Environment.NewLine}");
+        }
+        catch
+        {
+            // 日志落盘失败不影响主流程
+        }
+    }
+
     protected override void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);

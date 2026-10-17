@@ -24,10 +24,14 @@ public static class DeviceManager
         return (IMMDeviceEnumerator)Activator.CreateInstance(type)!;
     }
 
-    public static IReadOnlyList<WasapiDevice> EnumerateRenderDevices()
+    /// <summary>
+    /// 枚举渲染端点。默认全量（含 NotPresent/Unplugged 幽灵端点）——设备解析、
+    /// 看门狗设备存在性判断需要全量视野；UI 下拉框应传 DeviceState.Active。
+    /// </summary>
+    public static IReadOnlyList<WasapiDevice> EnumerateRenderDevices(DeviceState states = DeviceState.All)
     {
         var enumerator = CreateEnumerator();
-        var collection = enumerator.EnumAudioEndpoints(EDataFlow.Render, DeviceState.All);
+        var collection = enumerator.EnumAudioEndpoints(EDataFlow.Render, states);
         int count = collection.GetCount();
 
         string? defaultConsole = TryGetDefaultId(enumerator, ERole.Console);
