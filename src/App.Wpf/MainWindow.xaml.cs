@@ -480,6 +480,10 @@ public partial class MainWindow : Window
 
     private void MenuMinimizeToTray_Click(object sender, RoutedEventArgs e) => Hide();
 
+    /// <summary>退出：经 App.ExitApplication 走 AllowClose + Shutdown，正常拆除路由与托盘。</summary>
+    private void MenuExit_Click(object sender, RoutedEventArgs e)
+        => ((App)System.Windows.Application.Current).ExitApplication();
+
     private void MenuUsage_Click(object sender, RoutedEventArgs e) => InfoWindow.Usage().ShowDialog();
 
     private void MenuAbout_Click(object sender, RoutedEventArgs e) => InfoWindow.About().ShowDialog();

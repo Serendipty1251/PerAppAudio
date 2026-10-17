@@ -30,6 +30,7 @@
                 <MenuItem Header="_日志" Click="MenuTabLog_Click"/>
                 <Separator/>
                 <MenuItem Header="_最小化到托盘" Click="MenuMinimizeToTray_Click"/>
+                <MenuItem Header="_退出" Click="MenuExit_Click"/>
             </MenuItem>
             <MenuItem Header="_帮助">
                 <MenuItem Header="_使用说明" Click="MenuUsage_Click"/>
