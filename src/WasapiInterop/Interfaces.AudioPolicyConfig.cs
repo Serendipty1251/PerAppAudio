@@ -20,6 +20,8 @@ public static class AudioPolicyConfigFactory
     // 端点 ID 包装格式：\\?\SWD#MMDEVAPI#{endpointId}#{DEVINTERFACE_AUDIO_RENDER}
     private const string MMDeviceApiTokenPrefix = @"\\?\SWD#MMDEVAPI#";
     private const string RenderInterfaceGuid = "{e6327cad-dcec-4949-ae8a-991e976a79d2}";
+    // 捕获设备接口 GUID（KS_CATEGORY_CAPTURE）
+    private const string CaptureInterfaceGuid = "{2eef81be-33fa-4800-9670-1c4749c221b2}";
 
     /// <summary>绑定路由接口；失败返回 null（不抛异常）。</summary>
     public static IAudioPolicyConfigFactory? TryCreate()
@@ -117,12 +119,13 @@ public static class AudioPolicyConfigFactory
         }
     }
 
-    /// <summary>把纯端点 ID 包装成 \\?\SWD#MMDEVAPI#… 形式。</summary>
-    public static string ToPolicyEndpointId(string endpointId)
+    /// <summary>把纯端点 ID 包装成 \\?\SWD#MMDEVAPI#… 形式（按流选接口 GUID）。</summary>
+    public static string ToPolicyEndpointId(string endpointId, EDataFlow flow = EDataFlow.Render)
     {
         if (string.IsNullOrEmpty(endpointId)) return string.Empty;
+        string guid = flow == EDataFlow.Capture ? CaptureInterfaceGuid : RenderInterfaceGuid;
         if (endpointId.StartsWith(MMDeviceApiTokenPrefix, StringComparison.OrdinalIgnoreCase)) return endpointId;
-        return $"{MMDeviceApiTokenPrefix}{endpointId}#{RenderInterfaceGuid}";
+        return $"{MMDeviceApiTokenPrefix}{endpointId}#{guid}";
     }
 
     /// <summary>从持久化路由字符串中取回纯端点 ID。</summary>
@@ -133,12 +136,78 @@ public static class AudioPolicyConfigFactory
         {
             id = id[MMDeviceApiTokenPrefix.Length..];
         }
-        var suffix = "#" + RenderInterfaceGuid;
-        if (id.EndsWith(suffix, StringComparison.OrdinalIgnoreCase))
+        foreach (var guid in new[] { RenderInterfaceGuid, CaptureInterfaceGuid })
         {
-            id = id[..^suffix.Length];
+            var suffix = "#" + guid;
+            if (id.EndsWith(suffix, StringComparison.OrdinalIgnoreCase))
+            {
+                id = id[..^suffix.Length];
+                break;
+            }
         }
         return id;
+    }
+
+    /// <summary>
+    /// 设置进程的持久化默认【捕获】端点（麦克风路由）。
+    /// 注意：本机 Win11 26200 实测该工厂对 Capture 流稳定返回 E_INVALIDARG
+    /// （对已有捕获会话的进程亦如此，2026-10-17 验证）——Windows 的每进程音频
+    /// 路由仅支持渲染流。此方法保留以便未来系统版本/驱动生态支持时直接生效。
+    /// </summary>
+    public static int SetPersistedDefaultCaptureEndpoint(IAudioPolicyConfigFactory factory, uint processId, string endpointId)
+    {
+        var device = string.IsNullOrEmpty(endpointId) ? string.Empty : ToPolicyEndpointId(endpointId, EDataFlow.Capture);
+        var route = IntPtr.Zero;
+        try
+        {
+            if (device.Length > 0 && WindowsCreateString(device, device.Length, out route) < 0)
+            {
+                return -1;
+            }
+
+            int hr1 = factory.SetPersistedDefaultAudioEndpoint(processId, EDataFlow.Capture, ERole.Multimedia, route);
+            int hr2 = factory.SetPersistedDefaultAudioEndpoint(processId, EDataFlow.Capture, ERole.Console, route);
+            if (hr1 < 0) return hr1;
+            return hr2;
+        }
+        catch (Exception ex)
+        {
+            return ex.HResult;
+        }
+        finally
+        {
+            if (route != IntPtr.Zero)
+            {
+                WindowsDeleteString(route);
+            }
+        }
+    }
+
+    /// <summary>读回进程的持久化默认捕获端点。null = 读取失败；string.Empty = 跟随系统默认。</summary>
+    public static string? GetPersistedDefaultCaptureEndpoint(IAudioPolicyConfigFactory factory, uint processId)
+    {
+        var route = IntPtr.Zero;
+        try
+        {
+            int hr = factory.GetPersistedDefaultAudioEndpoint(processId, EDataFlow.Capture, ERole.Multimedia, out route);
+            if (hr < 0)
+            {
+                return null;
+            }
+
+            return FromPolicyEndpointId(TextOf(route));
+        }
+        catch
+        {
+            return null;
+        }
+        finally
+        {
+            if (route != IntPtr.Zero)
+            {
+                WindowsDeleteString(route);
+            }
+        }
     }
 
     private static string TextOf(IntPtr handle)

@@ -34,6 +34,7 @@ internal static class Program
                 "nadesc" => RunNaudioDesc(args),
                 "route" => RunRoute(args),
                 "endpoint" => RunEndpoint(args),
+                "mic" => RunMic(args),
                 "ctl" => RunCtl(args),
                 "profile" => RunProfile(args),
                 "devlisten" => RunDevListen(args),
@@ -63,6 +64,9 @@ internal static class Program
              endpoint get --pid <PID>     手段B2：读回每进程默认端点
              endpoint clear --pid <PID>   手段B2：清除端点覆盖
              devlisten --device <ID|名称> [--ms <时长>]   监听设备播放能量（验证迁移用）
+             mic list                      列出捕获（麦克风）端点
+             mic set --pid <PID> --to <ID|名称>   每进程默认麦克风（本机平台暂不支持，如实报错）
+             mic get --pid <PID>          读回每进程默认麦克风
 
              ctl add --pid <PID> --to <ID|名称> [--mode auto|a|b] [--volume 0-1]
                                          P1 控制闭环：立即改道 + 写入持久路由表
@@ -401,6 +405,83 @@ internal static class Program
             Console.WriteLine($"    Mix: {DeviceManager.DescribeDeviceMixFormat(d.Id)}");
         }
         return 0;
+    }
+
+    /// <summary>
+    /// 输入（麦克风）设备诊断：mic list | mic set --pid N --to &lt;ID|名称&gt; | mic get --pid N。
+    /// 平台事实（2026-10-17 本机 Win11 26200 实测）：IAudioPolicyConfigFactory 对 Capture 流
+    /// 稳定 E_INVALIDARG——Windows 每进程路由只支持渲染流。mic set 会如实返回该错误；
+    /// 每应用麦克风路由需要虚拟麦克风驱动（远期手段C）。
+    /// </summary>
+    private static int RunMic(string[] args)
+    {
+        var sub = args.Length > 1 ? args[1].ToLowerInvariant() : "list";
+
+        switch (sub)
+        {
+            case "list":
+            {
+                var devices = DeviceManager.EnumerateCaptureDevices();
+                Console.WriteLine($"{"#",-3} {"友好名",-40} {"状态",-10} 默认角色");
+                Console.WriteLine(new string('-', 90));
+                for (int i = 0; i < devices.Count; i++)
+                {
+                    var d = devices[i];
+                    var roles = string.Join(",",
+                        d.IsDefaultConsole ? "控制台" : "",
+                        d.IsDefaultMultimedia ? "多媒体" : "",
+                        d.IsDefaultCommunications ? "通信" : "").Trim(',');
+                    Console.WriteLine($"{i,-3} {Truncate(d.FriendlyName, 38),-40} {d.State,-10} {roles}");
+                    Console.WriteLine($"    ID: {d.Id}");
+                }
+                Console.WriteLine($"共 {devices.Count} 个捕获端点（Active 为可用）");
+                Console.WriteLine("注意：每应用麦克风路由在本机平台不可用（手段B2 仅支持渲染流，mic set 会返回 E_INVALIDARG）。");
+                return 0;
+            }
+
+            case "set":
+            {
+                if (!int.TryParse(GetOption(args, "--pid"), out int pid) || pid <= 0)
+                {
+                    Console.Error.WriteLine("缺少或非法的 --pid");
+                    return 2;
+                }
+                var to = GetOption(args, "--to") ?? throw new InvalidOperationException("缺少 --to");
+                var devices = DeviceManager.EnumerateCaptureDevices();
+                var device = devices.FirstOrDefault(d =>
+                        string.Equals(d.Id, to, StringComparison.OrdinalIgnoreCase)
+                        || string.Equals(d.FriendlyName, to, StringComparison.OrdinalIgnoreCase))
+                    ?? devices.FirstOrDefault(d => d.FriendlyName.Contains(to, StringComparison.OrdinalIgnoreCase))
+                    ?? throw new InvalidOperationException($"找不到捕获设备：{to}");
+
+                var factory = AudioPolicyConfigFactory.TryCreate()
+                    ?? throw new InvalidOperationException("IAudioPolicyConfigFactory 不可用");
+                int hr = AudioPolicyConfigFactory.SetPersistedDefaultCaptureEndpoint(factory, (uint)pid, device.Id);
+                Console.WriteLine($"[设置] 捕获端点 {device.FriendlyName} → PID {pid}: 0x{hr:X8}" +
+                    (hr < 0 ? "（本机平台不支持每进程捕获路由：Windows 每进程路由仅渲染流）" : ""));
+                return hr >= 0 ? 0 : 1;
+            }
+
+            case "get":
+            {
+                if (!int.TryParse(GetOption(args, "--pid"), out int pid) || pid <= 0)
+                {
+                    Console.Error.WriteLine("缺少或非法的 --pid");
+                    return 2;
+                }
+                var factory = AudioPolicyConfigFactory.TryCreate()
+                    ?? throw new InvalidOperationException("IAudioPolicyConfigFactory 不可用");
+                var route = AudioPolicyConfigFactory.GetPersistedDefaultCaptureEndpoint(factory, (uint)pid);
+                Console.WriteLine(route is null
+                    ? "[读回] 失败（平台不支持捕获流读回）"
+                    : $"[读回] {(route.Length == 0 ? "(跟随系统默认)" : route)}");
+                return 0;
+            }
+
+            default:
+                Console.Error.WriteLine($"未知子命令: {sub}（list / set / get）");
+                return 2;
+        }
     }
 
     private static int ListSessions(string[] args)

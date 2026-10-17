@@ -77,6 +77,62 @@ public static class DeviceManager
         }
     }
 
+    /// <summary>
+    /// 枚举捕获端点（麦克风/线路输入/立体声混音）。
+    /// 注意：Windows 的每进程音频路由（手段B2 的 IAudioPolicyConfigFactory）只支持 Render 流——
+    /// Capture 流的 SetPersistedDefaultAudioEndpoint 在本机 Win11 26200 实测稳定
+    /// E_INVALIDARG（对已有捕获会话的进程也一样，2026-10-17 验证）。故捕获端点仅用于
+    /// 列举/诊断；真正的每应用麦克风路由需要虚拟麦克风驱动（远期手段C）。
+    /// </summary>
+    public static IReadOnlyList<WasapiDevice> EnumerateCaptureDevices(DeviceState states = DeviceState.All)
+    {
+        var enumerator = CreateEnumerator();
+        var collection = enumerator.EnumAudioEndpoints(EDataFlow.Capture, states);
+        int count = collection.GetCount();
+
+        string? defaultConsole = TryGetDefaultId(enumerator, ERole.Console, EDataFlow.Capture);
+        string? defaultMultimedia = TryGetDefaultId(enumerator, ERole.Multimedia, EDataFlow.Capture);
+        string? defaultComms = TryGetDefaultId(enumerator, ERole.Communications, EDataFlow.Capture);
+
+        var list = new List<WasapiDevice>(count);
+        for (int i = 0; i < count; i++)
+        {
+            var device = collection.Item(i);
+            string id;
+            DeviceState state;
+            try
+            {
+                id = device.GetId();
+                state = device.GetState();
+            }
+            catch
+            {
+                continue;
+            }
+
+            var friendly = AudioClientActivation.ReadDeviceFriendlyName(device) ?? id;
+            list.Add(new WasapiDevice(
+                id, friendly, state,
+                string.Equals(id, defaultConsole, StringComparison.OrdinalIgnoreCase),
+                string.Equals(id, defaultMultimedia, StringComparison.OrdinalIgnoreCase),
+                string.Equals(id, defaultComms, StringComparison.OrdinalIgnoreCase)));
+        }
+
+        return list;
+    }
+
+    private static string? TryGetDefaultId(IMMDeviceEnumerator enumerator, ERole role, EDataFlow flow)
+    {
+        try
+        {
+            return enumerator.GetDefaultAudioEndpoint(flow, role).GetId();
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
     public static IMMDevice GetDevice(string deviceId)
     {
         return CreateEnumerator().GetDevice(deviceId);
