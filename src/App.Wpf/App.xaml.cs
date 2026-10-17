@@ -22,6 +22,12 @@ public partial class App : System.Windows.Application
 
     public AppHost Host => _host ?? throw new InvalidOperationException("AppHost 未初始化");
 
+    /// <summary>全局设置（UI 线程外只读消费；写入走 MainWindow 设置页）。</summary>
+    public static AppSettings Settings { get; set; } = AppSettings.Load();
+
+    /// <summary>热键管理器（OnStartup 创建；无热键系统上为 null）。</summary>
+    public static HotkeyManager? Hotkeys { get; private set; }
+
     /// <summary>UI 侧日志直写文件（与 Log 事件落盘同一格式；供 MainWindow 等无 Log 事件访问权的组件用）。</summary>
     public static void AppendFileLog(string line)
     {
@@ -92,6 +98,28 @@ public partial class App : System.Windows.Application
         _window.Show();
 
         InitTray();
+
+        // 全局热键（失败不影响主流程）
+        try
+        {
+            Hotkeys = HotkeyManager.TryCreate(_window, _window.DispatchHotkey);
+            if (Hotkeys is { } hk)
+            {
+                var (ok, failed) = hk.RegisterAll(Settings);
+                string msg = $"[热键] 已注册 {ok}/5";
+                if (failed.Count > 0)
+                {
+                    msg += "，失败：" + string.Join("、", failed);
+                }
+                _window.AppendLog(msg);
+                AppendFileLog(msg);
+            }
+        }
+        catch (Exception ex)
+        {
+            Hotkeys = null;
+            _window.AppendLog($"[热键] 注册失败: {ex.Message}");
+        }
 
         _ = _host.StartAsync();
     }

@@ -27,6 +27,7 @@ public partial class MainWindow : Window
     private System.ComponentModel.ICollectionView? _sessionView;
     private bool _allowClose;
     private List<string> _onlineDevices = new();
+    private AppSettings _settings = AppSettings.Load();
 
     public ObservableCollection<string> Devices { get; } = new();
 
@@ -36,7 +37,6 @@ public partial class MainWindow : Window
         // 会在解析阶段立即触发 Checked 事件，其处理器会访问本定时器。
         // 自动刷新默认关闭（IsChecked="False"），间隔 10s：避免抢焦点/打扰用户选设备。
         _refreshTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(10) };
-
         InitializeComponent();
         _host = ((App)System.Windows.Application.Current).Host;
 
@@ -50,10 +50,16 @@ public partial class MainWindow : Window
         _host.RoutesChanged += RefreshThreadSafe;
 
         _refreshTimer.Tick += (_, _) => Refresh();
-        _refreshTimer.Start();
+
+        // 刷新策略来自设置（默认 10s / 关闭）
+        _refreshTimer.Interval = TimeSpan.FromSeconds(Math.Max(2, _settings.RefreshSeconds));
+        AutoRefreshCheck.IsChecked = _settings.AutoRefresh;
+        _refreshTimer.IsEnabled = _settings.AutoRefresh;
 
         _sessionView = System.Windows.Data.CollectionViewSource.GetDefaultView(_sessions);
         _sessionView.Filter = SessionFilter;
+
+        LoadSettingsPage();
 
         Loaded += (_, _) => { RestoreWindowGeometry(); Refresh(); };
         Closed += (_, _) => SaveWindowGeometry();
@@ -455,6 +461,180 @@ public partial class MainWindow : Window
 
     private void RefreshNow_Click(object sender, RoutedEventArgs e) => Refresh();
 
+    // ---------- 全局热键动作 ----------
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern IntPtr GetForegroundWindow();
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);
+
+    /// <summary>当前前台窗口的进程（排除自身）。无音频会话时返回 null。</summary>
+    private (int Pid, string Name)? ForegroundApp()
+    {
+        IntPtr fg = GetForegroundWindow();
+        if (fg == IntPtr.Zero)
+        {
+            return null;
+        }
+
+        GetWindowThreadProcessId(fg, out uint pid);
+        if (pid == 0 || pid == Environment.ProcessId)
+        {
+            return null;
+        }
+
+        try
+        {
+            using var p = Process.GetProcessById((int)pid);
+            return ((int)pid, p.ProcessName);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    /// <summary>热键分发（HotkeyManager 回调，可能在非 UI 线程——全部 Dispatcher 回来）。</summary>
+    public void DispatchHotkey(int id)
+    {
+        Dispatcher.BeginInvoke(DispatcherPriority.Background, () =>
+        {
+            switch (id)
+            {
+                case HotkeyManager.IdNextOutput: HotkeyNextOutput(); break;
+                case HotkeyManager.IdVolumeUp: HotkeyVolume(+0.05f); break;
+                case HotkeyManager.IdVolumeDown: HotkeyVolume(-0.05f); break;
+                case HotkeyManager.IdMute: HotkeyMuteToggle(); break;
+                case HotkeyManager.IdShowWindow: ShowFromTray(); break;
+            }
+        });
+    }
+
+    private void Osd(string message, string icon)
+    {
+        if (App.Settings.OsdEnabled)
+        {
+            OsdWindow.Show(message, icon);
+        }
+    }
+
+    /// <summary>UI 日志 + 文件日志双写（热键动作需要落盘留痕）。</summary>
+    private void LogBoth(string line)
+    {
+        AppendLog(line);
+        App.AppendFileLog(line);
+    }
+
+    /// <summary>把前台应用的音频送到下一个在线输出设备（循环），并写入持久路由。</summary>
+    private void HotkeyNextOutput()
+    {
+        var fg = ForegroundApp();
+        if (fg is null)
+        {
+            Osd("未取到前台应用", "⚠️");
+            return;
+        }
+
+        var (pid, name) = fg.Value;
+        bool hasSession = WasapiSessionSource.EnumerateSessions().Any(s => s.ProcessId == pid);
+        if (!hasSession)
+        {
+            Osd($"{name} 没有音频会话（先让它播放一次声音）", "⚠️");
+            return;
+        }
+
+        var online = DeviceManager.EnumerateRenderDevices(DeviceState.Active);
+        if (online.Count == 0)
+        {
+            Osd("没有在线输出设备", "⚠️");
+            return;
+        }
+
+        string current = WasapiSessionSource.GetDeviceOfProcesses()
+            .TryGetValue(pid, out var cur) ? cur : string.Empty;
+        int idx = -1;
+        for (int i = 0; i < online.Count; i++)
+        {
+            if (string.Equals(online[i].FriendlyName, current, StringComparison.OrdinalIgnoreCase))
+            {
+                idx = i;
+                break;
+            }
+        }
+        var next = online[(idx + 1) % online.Count];
+
+        float vol = WasapiSessionSource.GetSessionVolumeStates(pid).FirstOrDefault()?.Volume ?? 1f;
+        string processPath = RouteStore.ResolveProcessPath(pid);
+        var device = DeviceManager.ResolveDevice(next.FriendlyName);
+
+        var command = new RoutingCommand(pid, processPath,
+            new AudioDeviceRef(device.FriendlyName, device.Id), vol, false);
+        var report = _host.Coordinator.ApplyRouteAsync(command, RoutingMode.Auto).GetAwaiter().GetResult();
+
+        _host.Store.Upsert(new StoredRoute
+        {
+            ProcessPath = processPath,
+            DeviceId = device.Id,
+            DeviceName = device.FriendlyName,
+            Mode = RoutingMode.Auto,
+            Volume = vol,
+        });
+
+        LogBoth($"[热键] {name}（PID {pid}）→ {device.FriendlyName} | " +
+            $"B2 {(report.EndpointApplied ? "✅" : "❌")} A {(report.LoopbackActive ? "✅" : "❌")}");
+        Osd($"{name} → {device.FriendlyName}", report.Success ? "🔊" : "⚠️");
+        RefreshThreadSafe();
+    }
+
+    /// <summary>前台应用会话音量增减（delta 有符号，5% 步进）。</summary>
+    private void HotkeyVolume(float delta)
+    {
+        var fg = ForegroundApp();
+        if (fg is null)
+        {
+            Osd("未取到前台应用", "⚠️");
+            return;
+        }
+
+        var (pid, name) = fg.Value;
+        var states = WasapiSessionSource.GetSessionVolumeStates(pid);
+        if (states.Count == 0)
+        {
+            Osd($"{name} 没有音频会话", "⚠️");
+            return;
+        }
+
+        float next = Math.Clamp((float)Math.Round(states[0].Volume + delta, 2), 0f, 1f);
+        int affected = WasapiSessionSource.ApplySessionControl(pid, volume: next);
+        LogBoth($"[热键] {name} 音量 {states[0].Volume:F2} → {next:F2}（{affected} 个会话）");
+        Osd($"{name} 音量 {next:P0}", next == 0 ? "🔇" : "🔊");
+    }
+
+    /// <summary>前台应用静音切换。</summary>
+    private void HotkeyMuteToggle()
+    {
+        var fg = ForegroundApp();
+        if (fg is null)
+        {
+            Osd("未取到前台应用", "⚠️");
+            return;
+        }
+
+        var (pid, name) = fg.Value;
+        var states = WasapiSessionSource.GetSessionVolumeStates(pid);
+        if (states.Count == 0)
+        {
+            Osd($"{name} 没有音频会话", "⚠️");
+            return;
+        }
+
+        bool nowMuted = !states[0].Muted;
+        WasapiSessionSource.ApplySessionControl(pid, mute: nowMuted);
+        LogBoth($"[热键] {name} {(nowMuted ? "静音" : "取消静音")}");
+        Osd($"{name} {(nowMuted ? "已静音" : "已取消静音")}", nowMuted ? "🔇" : "🔊");
+    }
+
     // ---------- 菜单栏 ----------
 
     private void Window_KeyDown(object sender, System.Windows.Input.KeyEventArgs e)
@@ -563,24 +743,121 @@ public partial class MainWindow : Window
             || row.DisplayName.Contains(text, StringComparison.OrdinalIgnoreCase);
     }
 
+    // ---------- 设置页 ----------
+
+    /// <summary>把设置载入控件（构造时一次；与 SettingChanged 的保存方向相反，用 _loadingSettings 防循环）。</summary>
+    private void LoadSettingsPage()
+    {
+        _loadingSettings = true;
+        try
+        {
+            StartWithWindowsCheck.IsChecked = _settings.StartWithWindows;
+            OsdEnabledCheck.IsChecked = _settings.OsdEnabled;
+            DefaultAutoRefreshCheck.IsChecked = _settings.AutoRefresh;
+            RefreshIntervalBox.SelectedIndex = _settings.RefreshSeconds switch
+            {
+                <= 2 => 0,
+                <= 5 => 1,
+                <= 30 => 3,
+                _ => 2,
+            };
+            HotkeyNextOutputBox.Text = _settings.HotkeyNextOutput;
+            HotkeyVolumeUpBox.Text = _settings.HotkeyVolumeUp;
+            HotkeyVolumeDownBox.Text = _settings.HotkeyVolumeDown;
+            HotkeyMuteBox.Text = _settings.HotkeyMute;
+            HotkeyShowWindowBox.Text = _settings.HotkeyShowWindow;
+        }
+        finally
+        {
+            _loadingSettings = false;
+        }
+    }
+
+    private bool _loadingSettings;
+
+    /// <summary>设置控件改动：立即保存并应用（刷新策略 / 自启 / OSD）。</summary>
+    private void SettingChanged(object sender, RoutedEventArgs e)
+    {
+        if (_loadingSettings)
+        {
+            return;
+        }
+
+        _settings.StartWithWindows = StartWithWindowsCheck.IsChecked == true;
+        _settings.OsdEnabled = OsdEnabledCheck.IsChecked == true;
+        _settings.AutoRefresh = DefaultAutoRefreshCheck.IsChecked == true;
+        _settings.RefreshSeconds = RefreshIntervalBox.SelectedIndex switch
+        {
+            0 => 2,
+            1 => 5,
+            3 => 30,
+            _ => 10,
+        };
+        _settings.Save();
+
+        // 即时应用
+        if (_settings.StartWithWindows && !AppSettings.SetStartWithWindows(true))
+        {
+            AppendLog("[设置] 开机自启写入失败（注册表不可写）");
+        }
+        if (!_settings.StartWithWindows)
+        {
+            AppSettings.SetStartWithWindows(false);
+        }
+        _refreshTimer.Interval = TimeSpan.FromSeconds(Math.Max(2, _settings.RefreshSeconds));
+        AutoRefreshCheck.IsChecked = _settings.AutoRefresh;
+        _refreshTimer.IsEnabled = _settings.AutoRefresh;
+        App.Settings = _settings;
+    }
+
+    /// <summary>保存热键配置并通知热键管理器重注册。</summary>
+    private void ApplyHotkeys_Click(object sender, RoutedEventArgs e)
+    {
+        _settings.HotkeyNextOutput = HotkeyNextOutputBox.Text.Trim();
+        _settings.HotkeyVolumeUp = HotkeyVolumeUpBox.Text.Trim();
+        _settings.HotkeyVolumeDown = HotkeyVolumeDownBox.Text.Trim();
+        _settings.HotkeyMute = HotkeyMuteBox.Text.Trim();
+        _settings.HotkeyShowWindow = HotkeyShowWindowBox.Text.Trim();
+        _settings.Save();
+
+        if (App.Hotkeys is { } hotkeys)
+        {
+            hotkeys.RegisterAll(_settings);
+            AppendLog("[热键] 已按新配置重新注册");
+        }
+        else
+        {
+            AppendLog("[热键] 热键管理器未就绪，配置已保存，重启后生效");
+        }
+    }
+
+    // ---------- 窗口几何（随 AppSettings 持久化） ----------
+
     private void RestoreWindowGeometry()
     {
         try
         {
-            string path = UiSettingsPath;
-            if (!File.Exists(path)) return;
-            var json = File.ReadAllText(path);
-            var doc = System.Text.Json.JsonDocument.Parse(json);
-            var root = doc.RootElement;
-            if (root.TryGetProperty("left", out var l) && root.TryGetProperty("top", out var t))
+            if (double.IsNaN(_settings.Left) || double.IsNaN(_settings.Top))
             {
-                Left = l.GetDouble();
-                Top = t.GetDouble();
+                return;
             }
-            if (root.TryGetProperty("width", out var w) && root.TryGetProperty("height", out var h))
+
+            // 多显示器/分辨率变化后坐标可能离屏，兜底不回填
+            if (_settings.Left < -10000 || _settings.Top < -10000 ||
+                _settings.Left > 30000 || _settings.Top > 30000)
             {
-                Width = Math.Max(MinWidth, w.GetDouble());
-                Height = Math.Max(MinHeight, h.GetDouble());
+                return;
+            }
+
+            Left = _settings.Left;
+            Top = _settings.Top;
+            if (_settings.Width >= MinWidth)
+            {
+                Width = _settings.Width;
+            }
+            if (_settings.Height >= MinHeight)
+            {
+                Height = _settings.Height;
             }
         }
         catch
@@ -593,17 +870,19 @@ public partial class MainWindow : Window
     {
         try
         {
-            Directory.CreateDirectory(Path.GetDirectoryName(UiSettingsPath)!);
-            File.WriteAllText(UiSettingsPath,
-                $"{{\"left\":{Left},\"top\":{Top},\"width\":{Width},\"height\":{Height}}}");
+            if (WindowState == WindowState.Normal)
+            {
+                _settings.Left = Left;
+                _settings.Top = Top;
+                _settings.Width = Width;
+                _settings.Height = Height;
+            }
+            _settings.Save();
         }
         catch
         {
         }
     }
-
-    private static string UiSettingsPath =>
-        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "PerAppAudio", "ui.json");
 
     private static RoutingMode ParseMode(string text) => text.ToLowerInvariant() switch
     {

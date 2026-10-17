@@ -209,6 +209,67 @@
                              VerticalScrollBarVisibility="Auto" FontFamily="Consolas" FontSize="11"/>
                 </DockPanel>
             </TabItem>
+            <!-- Tab 4：设置 -->
+            <TabItem Header="设置">
+                <ScrollViewer Margin="8" VerticalScrollBarVisibility="Auto">
+                    <StackPanel MaxWidth="560" HorizontalAlignment="Left">
+                        <TextBlock Text="常规" FontSize="14" FontWeight="SemiBold" Margin="0,4,0,8"/>
+                        <CheckBox x:Name="StartWithWindowsCheck" Content="开机自启（随 Windows 启动自动运行，写入当前用户启动项）"
+                                  Margin="0,2" Checked="SettingChanged" Unchecked="SettingChanged"/>
+                        <CheckBox x:Name="OsdEnabledCheck" Content="操作时显示 OSD 提示（切换设备 / 调音量时屏幕角落弹出）"
+                                  Margin="0,6,2,2" Checked="SettingChanged" Unchecked="SettingChanged"/>
+
+                        <Separator Margin="0,14"/>
+                        <TextBlock Text="正在播放" FontSize="14" FontWeight="SemiBold" Margin="0,4,0,8"/>
+                        <StackPanel Orientation="Horizontal" Margin="0,2">
+                            <TextBlock Text="自动刷新间隔:" VerticalAlignment="Center" Margin="0,0,8,0"
+                                       Foreground="{StaticResource MutedBrush}"/>
+                            <ComboBox x:Name="RefreshIntervalBox" Width="100" SelectionChanged="SettingChanged">
+                                <ComboBoxItem Content="2 秒"/>
+                                <ComboBoxItem Content="5 秒"/>
+                                <ComboBoxItem Content="10 秒"/>
+                                <ComboBoxItem Content="30 秒"/>
+                            </ComboBox>
+                        </StackPanel>
+                        <CheckBox x:Name="DefaultAutoRefreshCheck" Content="打开窗口时默认开启自动刷新"
+                                  Margin="0,8,2,2" Checked="SettingChanged" Unchecked="SettingChanged"/>
+
+                        <Separator Margin="0,14"/>
+                        <TextBlock Text="全局热键" FontSize="14" FontWeight="SemiBold" Margin="0,4,0,8"/>
+                        <TextBlock Text="格式：Ctrl+Alt+方向键/字母，清空 = 禁用。改后点「应用热键」立即生效。"
+                                   Foreground="{StaticResource MutedBrush}" FontSize="11" Margin="0,0,0,8"/>
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="180"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                            </Grid.RowDefinitions>
+                            <TextBlock Grid.Row="0" Grid.Column="0" Text="切换下一个输出设备:" VerticalAlignment="Center" Margin="0,4"/>
+                            <TextBox Grid.Row="0" Grid.Column="1" x:Name="HotkeyNextOutputBox" Margin="0,2"/>
+                            <TextBlock Grid.Row="1" Grid.Column="0" Text="音量 +5%:" VerticalAlignment="Center" Margin="0,4"/>
+                            <TextBox Grid.Row="1" Grid.Column="1" x:Name="HotkeyVolumeUpBox" Margin="0,2"/>
+                            <TextBlock Grid.Row="2" Grid.Column="0" Text="音量 -5%:" VerticalAlignment="Center" Margin="0,4"/>
+                            <TextBox Grid.Row="2" Grid.Column="1" x:Name="HotkeyVolumeDownBox" Margin="0,2"/>
+                            <TextBlock Grid.Row="3" Grid.Column="0" Text="静音切换:" VerticalAlignment="Center" Margin="0,4"/>
+                            <TextBox Grid.Row="3" Grid.Column="1" x:Name="HotkeyMuteBox" Margin="0,2"/>
+                            <TextBlock Grid.Row="4" Grid.Column="0" Text="显示主窗口:" VerticalAlignment="Center" Margin="0,4"/>
+                            <TextBox Grid.Row="4" Grid.Column="1" x:Name="HotkeyShowWindowBox" Margin="0,2"/>
+                        </Grid>
+                        <Button Content="应用热键" Style="{StaticResource PrimaryButton}" HorizontalAlignment="Left"
+                                Margin="0,10,0,0" Click="ApplyHotkeys_Click"/>
+
+                        <Separator Margin="0,14"/>
+                        <TextBlock Text="配置存储于 %APPDATA%\PerAppAudio\ui.json；日志与路由表见「工具」菜单。"
+                                   Foreground="{StaticResource MutedBrush}" FontSize="11" TextWrapping="Wrap"/>
+                    </StackPanel>
+                </ScrollViewer>
+            </TabItem>
         </TabControl>
     </DockPanel>
 </Window>
