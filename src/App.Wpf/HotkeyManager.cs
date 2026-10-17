@@ -28,6 +28,7 @@ public sealed class HotkeyManager
     public const int IdVolumeDown = 3;
     public const int IdMute = 4;
     public const int IdShowWindow = 5;
+    public const int IdShowFlyout = 6;
 
     private readonly Window _window;
     private readonly Action<int> _dispatch;
@@ -117,8 +118,9 @@ public sealed class HotkeyManager
         TryRegister(hwnd, IdVolumeDown, "音量-", settings.HotkeyVolumeDown, failed);
         TryRegister(hwnd, IdMute, "静音", settings.HotkeyMute, failed);
         TryRegister(hwnd, IdShowWindow, "显示窗口", settings.HotkeyShowWindow, failed);
+        TryRegister(hwnd, IdShowFlyout, "托盘面板", settings.HotkeyShowFlyout, failed);
 
-        return (5 - failed.Count, failed);
+        return (6 - failed.Count, failed);
     }
 
     private AppSettings? _pendingSettings;
@@ -140,7 +142,7 @@ public sealed class HotkeyManager
         {
             return;
         }
-        foreach (int id in new[] { IdNextOutput, IdVolumeUp, IdVolumeDown, IdMute, IdShowWindow })
+        foreach (int id in new[] { IdNextOutput, IdVolumeUp, IdVolumeDown, IdMute, IdShowWindow, IdShowFlyout })
         {
             UnregisterHotKey(hwnd, id);
         }

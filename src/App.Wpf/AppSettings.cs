@@ -33,6 +33,7 @@ public sealed class AppSettings
     public string HotkeyVolumeDown { get; set; } = "Ctrl+Alt+Down";
     public string HotkeyMute { get; set; } = "Ctrl+Alt+M";
     public string HotkeyShowWindow { get; set; } = "Ctrl+Alt+P";
+    public string HotkeyShowFlyout { get; set; } = "Ctrl+Alt+F";
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
