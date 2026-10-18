@@ -18,12 +18,23 @@ public sealed class EndpointBackend : IRoutingBackend
     private IAudioPolicyConfigFactory? _factory;
     private readonly HashSet<int> _routed = new();
     private readonly object _gate = new();
+    /// <summary>工厂串行化：_factory 是共享 COM 对象，并发 Set/Recycle 会 use-after-release。</summary>
+    private readonly object _factoryGate = new();
 
     public RoutingMode Mode => RoutingMode.Endpoint;
 
     public ValueTask<BackendProbeResult> ProbeAsync(CancellationToken ct = default)
     {
-        var factory = AudioPolicyConfigFactory.TryCreate();
+        IAudioPolicyConfigFactory? factory;
+        lock (_factoryGate)
+        {
+            factory = AudioPolicyConfigFactory.TryCreate();
+            if (factory is not null)
+            {
+                _factory = factory;
+            }
+        }
+
         if (factory is null)
         {
             return ValueTask.FromResult(new BackendProbeResult(
@@ -31,7 +42,6 @@ public sealed class EndpointBackend : IRoutingBackend
                 "IAudioPolicyConfigFactory 不可用（手段B2 需要 Windows 10 21H2+ / Windows 11；更早系统请用手段A）"));
         }
 
-        _factory = factory;
         return ValueTask.FromResult(new BackendProbeResult(true, "IAudioPolicyConfigFactory 可用"));
     }
 
@@ -71,30 +81,33 @@ public sealed class EndpointBackend : IRoutingBackend
     /// <summary>读回进程当前的持久化默认端点（纯端点 ID）。null = 读取失败；string.Empty = 跟随系统默认。</summary>
     public string? GetPersistedEndpoint(int processId)
     {
-        for (int attempt = 0; attempt < BackoffMs.Length; attempt++)
+        lock (_factoryGate)
         {
-            if (BackoffMs[attempt] > 0)
+            for (int attempt = 0; attempt < BackoffMs.Length; attempt++)
             {
-                Thread.Sleep(BackoffMs[attempt]);
+                if (BackoffMs[attempt] > 0)
+                {
+                    Thread.Sleep(BackoffMs[attempt]);
+                }
+
+                var factory = EnsureFactory();
+                if (factory is null)
+                {
+                    return null;
+                }
+
+                string? result = AudioPolicyConfigFactory.GetPersistedDefaultEndpoint(factory, (uint)processId);
+                if (result is not null)
+                {
+                    return result;
+                }
+
+                // 读失败：丢弃工厂，下一轮重建后重试
+                RecycleFactory(factory);
             }
 
-            var factory = EnsureFactory();
-            if (factory is null)
-            {
-                return null;
-            }
-
-            string? result = AudioPolicyConfigFactory.GetPersistedDefaultEndpoint(factory, (uint)processId);
-            if (result is not null)
-            {
-                return result;
-            }
-
-            // 读失败：丢弃工厂，下一轮重建后重试
-            RecycleFactory(factory);
+            return null;
         }
-
-        return null;
     }
 
     public bool IsRouting(int processId)
@@ -112,27 +125,30 @@ public sealed class EndpointBackend : IRoutingBackend
     private int SetWithRetry(uint processId, string endpointId)
     {
         int hr = 0;
-        for (int attempt = 0; attempt < BackoffMs.Length; attempt++)
+        lock (_factoryGate)
         {
-            if (BackoffMs[attempt] > 0)
+            for (int attempt = 0; attempt < BackoffMs.Length; attempt++)
             {
-                Thread.Sleep(BackoffMs[attempt]);
-            }
+                if (BackoffMs[attempt] > 0)
+                {
+                    Thread.Sleep(BackoffMs[attempt]);
+                }
 
-            var factory = EnsureFactory();
-            if (factory is null)
-            {
-                hr = unchecked((int)0x80004005); // E_FAIL：工厂绑定不上
-                continue;
-            }
+                var factory = EnsureFactory();
+                if (factory is null)
+                {
+                    hr = unchecked((int)0x80004005); // E_FAIL：工厂绑定不上
+                    continue;
+                }
 
-            hr = AudioPolicyConfigFactory.SetPersistedDefaultEndpoint(factory, processId, endpointId);
-            if (hr >= 0)
-            {
-                return hr;
-            }
+                hr = AudioPolicyConfigFactory.SetPersistedDefaultEndpoint(factory, processId, endpointId);
+                if (hr >= 0)
+                {
+                    return hr;
+                }
 
-            RecycleFactory(factory);
+                RecycleFactory(factory);
+            }
         }
 
         return hr;

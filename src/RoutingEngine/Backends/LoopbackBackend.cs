@@ -175,28 +175,31 @@ public sealed class LoopbackBackend : IRoutingBackend
 
     public ValueTask<RoutingResult> RemoveAsync(RoutingCommand command, CancellationToken ct = default)
     {
+        ActiveRoute? route;
         lock (_gate)
         {
-            if (!_routes.Remove(command.ProcessId, out var route))
+            if (!_routes.Remove(command.ProcessId, out route))
             {
                 return ValueTask.FromResult(new RoutingResult(false, RoutingMode.Loopback, "没有找到活动路由"));
             }
-
-            route.MuteGuard.Dispose();
-            route.Capture.Dispose();
-            route.Renderer.Dispose();
-
-            // 恢复原会话声音
-            try
-            {
-                WasapiSessionSource.MuteProcessSessions(command.ProcessId, mute: false);
-            }
-            catch
-            {
-            }
-
-            return ValueTask.FromResult(RoutingResult.Ok(RoutingMode.Loopback) with { Message = "路由已拆除，原会话已恢复" });
         }
+
+        // 锁外释放：Capture.Dispose() 会 Join 采集线程，而该线程的 OnPacket 回调需要拿 _gate，
+        // 持锁 Dispose 会让两者互相等待（Join 超时最多卡 2 秒，表现为拆除路由时界面卡顿）。
+        route.MuteGuard.Dispose();
+        route.Capture.Dispose(); // 先停采集：返回后不会再有 OnPacket 进入
+        route.Renderer.Dispose();
+
+        // 恢复原会话声音
+        try
+        {
+            WasapiSessionSource.MuteProcessSessions(command.ProcessId, mute: false);
+        }
+        catch
+        {
+        }
+
+        return ValueTask.FromResult(RoutingResult.Ok(RoutingMode.Loopback) with { Message = "路由已拆除，原会话已恢复" });
     }
 
     /// <summary>PoC-1 报告用：取某进程的统计快照。</summary>

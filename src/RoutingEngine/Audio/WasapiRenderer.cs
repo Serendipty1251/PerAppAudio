@@ -17,8 +17,14 @@ public sealed class WasapiRenderer : IDisposable
     public WAVEFORMATEX Format { get; }
     public int BufferFrames { get; }
     public int BytesPerFrame { get; }
+    /// <summary>样本是否为 32 位浮点（含 WAVEFORMATEXTENSIBLE 的浮点子格式——现代设备 Mix 格式多为这种）。</summary>
+    public bool IsFloatFormat { get; }
+    /// <summary>单样本字节数（由 nBlockAlign/nChannels 推导，避免位深与实际块对齐不一致）。</summary>
+    public int BytesPerSample { get; }
 
-    private WasapiRenderer(IAudioClient client, IAudioRenderClient render, EventWaitHandle packetEvent, WAVEFORMATEX format)
+    private static readonly Guid KsdSubtypeIeeeFloat = new("00000003-0000-0010-8000-00AA00389B71");
+
+    private WasapiRenderer(IAudioClient client, IAudioRenderClient render, EventWaitHandle packetEvent, WAVEFORMATEX format, bool isFloat)
     {
         _client = client;
         _render = render;
@@ -26,6 +32,25 @@ public sealed class WasapiRenderer : IDisposable
         Format = format;
         BufferFrames = client.GetBufferSize();
         BytesPerFrame = format.nBlockAlign;
+        IsFloatFormat = isFloat;
+        BytesPerSample = Math.Max(1, format.nBlockAlign / Math.Max(1, (int)format.nChannels));
+    }
+
+    /// <summary>
+    /// 判定实际格式是否浮点。WAVEFORMATEX 只含 18 字节基础结构，
+    /// Extensible 的 SubFormat GUID 位于偏移 24，必须在原始指针释放前读取。
+    /// </summary>
+    private static bool IsFloat(IntPtr ptr, WAVEFORMATEX format)
+    {
+        if (format.wFormatTag == WAVEFORMATEX.WaveFormatIeeeFloat)
+        {
+            return true;
+        }
+        if (format.wFormatTag == WAVEFORMATEX.WaveFormatExtensible && format.cbSize >= 22)
+        {
+            return Marshal.PtrToStructure<Guid>(ptr + 24) == KsdSubtypeIeeeFloat;
+        }
+        return false;
     }
 
     public static WasapiRenderer Start(string deviceId, int bufferMilliseconds)
@@ -58,9 +83,11 @@ public sealed class WasapiRenderer : IDisposable
         }
 
         WAVEFORMATEX format;
+        bool isFloat;
         try
         {
             format = Marshal.PtrToStructure<WAVEFORMATEX>(usePtr);
+            isFloat = IsFloat(usePtr, format);
             var sessionGuid = Guid.Empty;
             long hnsBufferDuration = bufferMilliseconds * 10_000L;
             client.Initialize(
@@ -92,7 +119,7 @@ public sealed class WasapiRenderer : IDisposable
         client.SetEventHandle(packetEvent.SafeWaitHandle.DangerousGetHandle());
         client.Start();
 
-        return new WasapiRenderer(client, render, packetEvent, format) { _started = true };
+        return new WasapiRenderer(client, render, packetEvent, format, isFloat) { _started = true };
     }
 
     /// <summary>当前渲染缓冲区已填充帧数。</summary>

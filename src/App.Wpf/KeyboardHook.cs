@@ -28,6 +28,9 @@ internal sealed class KeyboardHook : IDisposable
     private readonly GCHandle _procHandle;
     private IntPtr _hook;
     private readonly HashSet<uint> _down = new();
+    // 已按下（尚未抬起）的非修饰键：用于抑制键盘自动重复触发（KBDLLHOOKSTRUCT.Flags 没有
+    // 「重复按下」位，0x20 是 LLKHF_ALTDOWN——按旧写法会把所有 Alt 组合键误判为重复而永不触发）。
+    private readonly HashSet<uint> _pressed = new();
 
     private delegate IntPtr HookProc(int nCode, IntPtr wParam, IntPtr lParam);
 
@@ -105,29 +108,24 @@ internal sealed class KeyboardHook : IDisposable
             {
                 var k = Marshal.PtrToStructure<Kbdllhookstruct>(lParam);
                 uint vk = k.VkCode;
-                bool repeat = (k.Flags & 0x30) != 0; // bit 30 = previous key state (repeat)
                 if (vk is VkControl or VkMenu or VkShift or VkLwin or VkRwin)
                 {
                     _down.Add(vk);
                 }
-                else
+                else if (_pressed.Add(vk)) // 首次按下才触发；按住不放的系统重复不再触发
                 {
-                    if (!repeat)
+                    uint mods = CurrentMods(_down);
+                    if (_combos.TryGetValue(new ComboKey(mods, vk), out int id))
                     {
-                        uint mods = CurrentMods(_down);
-                        var combo = new ComboKey(mods, vk);
-                        if (_combos.TryGetValue(combo, out int id))
-                        {
-                            _onCombo(id);
-                        }
+                        _onCombo(id);
                     }
-                    _down.Remove(vk);
                 }
             }
             else if (msg is 0x0101 or 0x0105) // WM_KEYUP / WM_SYSKEYUP
             {
                 var k = Marshal.PtrToStructure<Kbdllhookstruct>(lParam);
                 _down.Remove(k.VkCode);
+                _pressed.Remove(k.VkCode);
             }
         }
         return CallNextHookEx(_hook, nCode, wParam, lParam);

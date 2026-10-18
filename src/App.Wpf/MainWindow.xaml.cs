@@ -901,7 +901,7 @@ public partial class MainWindow : Window
     /// <summary>从当前 UI 选择解析音板播放目标（三态模式）。返回 null = 当前选择不可用（已提示）。</summary>
     private PlayTargets? ResolveSoundpadTargets()
     {
-        int mode = SoundpadModeBox.SelectedIndex; // 0 仅扬声器 / 1 仅麦克风 / 2 两者
+        int mode = Math.Clamp(SoundpadModeBox.SelectedIndex, 0, 2); // 0 仅扬声器 / 1 仅麦克风 / 2 两者
         string? speakerId = null;
         string? micId = null;
 
@@ -1237,23 +1237,40 @@ public partial class MainWindow : Window
     /// <summary>高级开关（归一化 / Block voice / 混入人声 / 透传热键）变更。</summary>
     private void SoundpadOption_Changed(object sender, RoutedEventArgs e)
     {
-        if (_loadingSettings)
+        if (_loadingSettings || _optionGuard)
         {
             return;
         }
-        _settings.SoundpadNormalize = NormalizeCheck.IsChecked == true;
-        _settings.SoundpadBlockVoice = BlockVoiceCheck.IsChecked == true;
-        _settings.SoundpadMixMic = MixMicCheck.IsChecked == true;
-        _settings.SoundpadPassthrough = PassthroughCheck.IsChecked == true;
-        // 互斥：混入人声与 Block voice 语义相反
-        if (MixMicCheck.IsChecked == true && BlockVoiceCheck.IsChecked == true)
+        _optionGuard = true;
+        try
         {
-            BlockVoiceCheck.IsChecked = false;
-            _settings.SoundpadBlockVoice = false;
+            _settings.SoundpadNormalize = NormalizeCheck.IsChecked == true;
+            _settings.SoundpadPassthrough = PassthroughCheck.IsChecked == true;
+
+            // Block voice 与「混入人声」互为反义：做成单选对，勾一个自动取消另一个。
+            // 旧写法只做了「同时勾选时取消 Block voice」的单向排除，且 BlockVoice 并未参与
+            // UpdateMicRouter 判断——取消 Block voice 并不会转发人声，界面与行为不一致。
+            bool block = ReferenceEquals(sender, MixMicCheck)
+                ? MixMicCheck.IsChecked != true     // 勾「混入人声」= 不阻断
+                : BlockVoiceCheck.IsChecked == true; // 其余情况以 Block voice 勾选状态为准
+
+            BlockVoiceCheck.IsChecked = block;
+            MixMicCheck.IsChecked = !block;
+            _settings.SoundpadBlockVoice = block;
+            _settings.SoundpadMixMic = !block;
         }
+        finally
+        {
+            _optionGuard = false;
+        }
+
         _settings.Save();
         UpdateMicRouter();
-        RebuildHotkeys();
+        // 仅透传开关会改变热键的注册方式；「归一化」不应重建热键与键盘钩子。
+        if (ReferenceEquals(sender, PassthroughCheck))
+        {
+            RebuildHotkeys();
+        }
     }
 
     private void SoundSearch_TextChanged(object sender, TextChangedEventArgs e) => RefreshSoundButtons();
@@ -1283,11 +1300,11 @@ public partial class MainWindow : Window
         }
     }
 
-    /// <summary>根据当前模式与设置刷新混音路由（Block voice = 不转发麦克风；混入人声 = 转发）。</summary>
+    /// <summary>根据当前模式与设置刷新混音路由（Block voice = 不转发麦克风；为 false 时转发人声）。</summary>
     private void UpdateMicRouter()
     {
         bool micNeeded = SoundpadModeBox.SelectedIndex != 0;
-        if (_settings.SoundpadMixMic && micNeeded)
+        if (!_settings.SoundpadBlockVoice && micNeeded)
         {
             string? micId = SoundPadService.ResolveMicDeviceId(
                 DeviceNaming.Bare(SoundpadMicDeviceBox.SelectedItem as string ?? _settings.SoundpadMicDevice));
@@ -1331,6 +1348,10 @@ public partial class MainWindow : Window
             int i = 0;
             foreach (var (name, g) in _settings.SoundpadHotkeys)
             {
+                if (string.IsNullOrWhiteSpace(g))
+                {
+                    continue; // 与 HotkeyManager.RegisterAll 一致：空手势不占用 ID，否则两边编号会错位
+                }
                 if (i >= HotkeyManager.SoundpadHotkeyMax - HotkeyManager.SoundpadHotkeyBase)
                 {
                     break;
@@ -1569,6 +1590,9 @@ public partial class MainWindow : Window
     }
 
     private bool _loadingSettings;
+
+    /// <summary>音板高级开关互斥联动时抑制重入（避免 CheckBox 事件递归）。</summary>
+    private bool _optionGuard;
 
     /// <summary>设置控件改动：立即保存并应用（刷新策略 / 自启 / OSD）。</summary>
     private void SettingChanged(object sender, RoutedEventArgs e)

@@ -74,7 +74,7 @@ public sealed class AppSettings
     public string SoundpadHkPrevious { get; set; } = "Ctrl+Alt+Left";
     public string SoundpadHkVolumeUp { get; set; } = "Ctrl+Alt+Add";
     public string SoundpadHkVolumeDown { get; set; } = "Ctrl+Alt+Subtract";
-    public string SoundpadHkMode { get; set; } = "Ctrl+Alt+M";
+    public string SoundpadHkMode { get; set; } = "Ctrl+Alt+Shift+M";
 
     // ---- 全局热键（空字符串 = 禁用该热键）----
     public string HotkeyNextOutput { get; set; } = "Ctrl+Alt+Right";
@@ -99,7 +99,12 @@ public sealed class AppSettings
         {
             if (File.Exists(SettingsPath))
             {
-                return JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(SettingsPath)) ?? new AppSettings();
+                var loaded = JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(SettingsPath));
+                if (loaded is not null)
+                {
+                    loaded.Normalize();
+                    return loaded;
+                }
             }
         }
         catch
@@ -107,6 +112,21 @@ public sealed class AppSettings
             // 设置损坏回退默认，不影响启动
         }
         return new AppSettings();
+    }
+
+    /// <summary>修正历史版本遗留的自相矛盾配置（升级迁移，幂等）。</summary>
+    private void Normalize()
+    {
+        // 旧默认把「切换模式」与「静音」都设成 Ctrl+Alt+M：RegisterHotKey 注册同一组合键只能成功一次，
+        // 后注册的（切换模式）必然失败。等于旧值时迁移到不冲突的组合。
+        if (!string.IsNullOrWhiteSpace(SoundpadHkMode) &&
+            string.Equals(SoundpadHkMode, HotkeyMute, StringComparison.OrdinalIgnoreCase))
+        {
+            SoundpadHkMode = "Ctrl+Alt+Shift+M";
+        }
+
+        // Block voice 与「混入人声」互为反义：以 Block voice 为准，修正可能不一致的旧配置。
+        SoundpadMixMic = !SoundpadBlockVoice;
     }
 
     public void Save()

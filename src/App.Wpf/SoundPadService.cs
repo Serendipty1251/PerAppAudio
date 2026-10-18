@@ -304,22 +304,41 @@ public sealed class SoundPadService : IDisposable
     /// </summary>
     public void SetMicMix(bool enabled, string? micDeviceId)
     {
+        MicRouter? stop = null;
+        MicRouter? start = null;
         lock (_gate)
         {
-            if (enabled && !string.IsNullOrEmpty(micDeviceId))
+            bool want = enabled && !string.IsNullOrEmpty(micDeviceId);
+            if (want)
             {
                 if (_micRouter is null || _micRouter.DeviceId != micDeviceId)
                 {
-                    _micRouter?.Dispose();
-                    _micRouter = new MicRouter(micDeviceId);
-                    _micRouter.Start();
+                    stop = _micRouter;
+                    start = new MicRouter(micDeviceId!);
+                    _micRouter = start;
                 }
             }
-            else
+            else if (_micRouter is not null)
             {
-                _micRouter?.Dispose();
+                stop = _micRouter;
                 _micRouter = null;
             }
+        }
+
+        // 锁外停止旧路由：Dispose 会 Join 两个线程（各最多 1s），放锁内会卡住 UI 与音效渲染线程。
+        stop?.Dispose();
+
+        if (start is not null && !start.Start())
+        {
+            // 启动失败（无麦克风/端点被占）：清掉引用便于下次重试，不能留下一个「死」路由。
+            lock (_gate)
+            {
+                if (ReferenceEquals(_micRouter, start))
+                {
+                    _micRouter = null;
+                }
+            }
+            start.Dispose();
         }
     }
 
@@ -457,8 +476,8 @@ public sealed class SoundPadService : IDisposable
 
             int sourceChannels = Math.Max(1, reader.WaveFormat.Channels);
             int deviceChannels = Math.Max(1, (int)renderer.Format.nChannels);
-            bool isFloat = renderer.Format.wFormatTag == WAVEFORMATEX.WaveFormatIeeeFloat;
-            int bytesPerSample = isFloat ? 4 : 2;
+            bool isFloat = renderer.IsFloatFormat;
+            int bytesPerSample = renderer.BytesPerSample;
 
             ISampleProvider samples = reader.WaveFormat.SampleRate == renderer.Format.nSamplesPerSec
                 ? reader
@@ -519,7 +538,11 @@ public sealed class SoundPadService : IDisposable
             renderer?.Dispose();
             lock (_gate)
             {
-                _players.Remove(item.Key);
+                // 只移除自己：若同一 key 已被新的播放实例替换，不能误删新实例
+                if (_players.TryGetValue(item.Key, out var current) && ReferenceEquals(current, player))
+                {
+                    _players.Remove(item.Key);
+                }
             }
             App.AppendFileLog($"[音板] 结束 {item.DisplayName}");
             StateChanged?.Invoke();
@@ -535,9 +558,22 @@ public sealed class SoundPadService : IDisposable
             {
                 float s = src[(f * srcChannels) + Math.Min(c, srcChannels - 1)] * gain;
                 int offset = ((f * dstChannels) + c) * bytesPerSample;
-                if (isFloat)
+                if (isFloat && bytesPerSample == 4)
                 {
                     BitConverter.GetBytes(s).CopyTo(dst, offset);
+                }
+                else if (bytesPerSample == 4)
+                {
+                    // 32 位整型 PCM（罕见，但按块对齐支持，避免写出半截样本）
+                    int pcm = (int)Math.Clamp(s * 2147483647f, -2147483648f, 2147483647f);
+                    BitConverter.GetBytes(pcm).CopyTo(dst, offset);
+                }
+                else if (bytesPerSample == 3)
+                {
+                    int v = (int)Math.Clamp(s * 8388607f, -8388608f, 8388607f);
+                    dst[offset] = (byte)v;
+                    dst[offset + 1] = (byte)(v >> 8);
+                    dst[offset + 2] = (byte)(v >> 16);
                 }
                 else
                 {

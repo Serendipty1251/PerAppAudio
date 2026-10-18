@@ -132,7 +132,15 @@ public sealed class DeviceEventService : IDisposable
 
         if (events.Count == 0)
         {
-            DevicesChanged?.Invoke();
+            // async void 中未捕获的订阅者异常会直接结束进程，这里必须兜住
+            try
+            {
+                DevicesChanged?.Invoke();
+            }
+            catch
+            {
+                // 订阅者异常不影响事件循环
+            }
             return;
         }
 

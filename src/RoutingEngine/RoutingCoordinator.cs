@@ -51,6 +51,7 @@ public sealed class RoutingCoordinator : IDisposable
     private readonly object _gate = new();
     private Timer? _watchdog;
     private volatile bool _disposed;
+    private int _watchdogBusy;
 
     private BackendProbeResult _loopbackProbe = new(false, "未探测");
     private BackendProbeResult _endpointProbe = new(false, "未探测");
@@ -248,6 +249,12 @@ public sealed class RoutingCoordinator : IDisposable
             return;
         }
 
+        // Timer 不保证串行：上一轮未结束时直接跳过，避免同一路由被并发重挂/拆除。
+        if (Interlocked.Exchange(ref _watchdogBusy, 1) != 0)
+        {
+            return;
+        }
+
         try
         {
             List<LiveRoute> routes;
@@ -256,8 +263,10 @@ public sealed class RoutingCoordinator : IDisposable
                 routes = _live.Values.ToList();
             }
 
+            // 只把「Active」端点视为存在：设备拔出后 Windows 通常保留端点并标记为
+            // Unplugged/NotPresent（幽灵端点），用 DeviceState.All 会让「设备消失」分支永不触发。
             var deviceIds = new HashSet<string>(
-                DeviceManager.EnumerateRenderDevices().Select(d => d.Id),
+                DeviceManager.EnumerateRenderDevices(DeviceState.Active).Select(d => d.Id),
                 StringComparer.OrdinalIgnoreCase);
 
             foreach (var route in routes)
@@ -319,6 +328,10 @@ public sealed class RoutingCoordinator : IDisposable
         catch (Exception ex)
         {
             Log?.Invoke($"[看门狗] 异常（忽略，下一轮继续）: {ex.Message}");
+        }
+        finally
+        {
+            Interlocked.Exchange(ref _watchdogBusy, 0);
         }
     }
 

@@ -312,8 +312,8 @@ public sealed class HotkeyManager
             "SUBTRACT" => 0x6D,
             _ when k.Length == 1 && k[0] is >= 'A' and <= 'Z' => k[0],
             _ when k.Length == 1 && k[0] is >= '0' and <= '9' => k[0],
-            _ when k.Length == 2 && k[0] == 'F' && k[1] is >= '1' and <= '9' => (uint)(0x70 + (k[1] - '0')),
-            _ when k.Length == 3 && k[0] == 'F' && k[1] == '1' && k[2] is >= '0' and <= '2' => (uint)(0x70 + 10 + (k[2] - '0')),
+            _ when k.Length == 2 && k[0] == 'F' && k[1] is >= '1' and <= '9' => (uint)(0x70 + (k[1] - '1')),
+            _ when k.Length == 3 && k[0] == 'F' && k[1] == '1' && k[2] is >= '0' and <= '2' => (uint)(0x70 + 9 + (k[2] - '0')),
             _ => 0,
         };
     }

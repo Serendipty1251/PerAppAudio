@@ -49,15 +49,16 @@ internal sealed class MicRouter : IDisposable
 
     public string DeviceId => _deviceId;
 
-    public void Start()
+    /// <summary>启动捕获与渲染。返回 false = 启动失败（已自行清理，调用方不应保留该实例）。</summary>
+    public bool Start()
     {
         try
         {
             _renderer = WasapiRenderer.Start(_deviceId, 100);
             _dstRate = (int)_renderer.Format.nSamplesPerSec;
             _dstChannels = Math.Max(1, (int)_renderer.Format.nChannels);
-            _dstFloat = _renderer.Format.wFormatTag == WAVEFORMATEX.WaveFormatIeeeFloat;
-            _dstBytesPerSample = _dstFloat ? 4 : 2;
+            _dstFloat = _renderer.IsFloatFormat;
+            _dstBytesPerSample = _renderer.BytesPerSample;
 
             // 取默认捕获端点（麦克风），激活 IAudioClient
             var enumerator = DeviceManager.CreateEnumerator();
@@ -92,11 +93,13 @@ internal sealed class MicRouter : IDisposable
             _captureThread.Start();
             _pump = new Thread(PumpLoop) { IsBackground = true, Name = "MicRouter" };
             _pump.Start();
+            return true;
         }
         catch (Exception ex)
         {
             App.AppendFileLog($"[混音路由] 启动失败: {ex.Message}");
             Dispose();
+            return false;
         }
     }
 
@@ -206,6 +209,18 @@ internal sealed class MicRouter : IDisposable
 
         // 重采样到目标采样率（线性），入队供渲染线程消费
         float[] dst = ResampleLinear(floats, _srcChannels, _srcRate, _dstRate);
+
+        // 有界队列：渲染线程停摆（设备被拔出/被独占，GetFreeFrames 长期为 0）时防止无限积压。
+        // 上限约 2 秒音频，溢出时丢弃最旧的一半，保持低延迟。
+        int cap = Math.Max(_dstRate, 8000) * Math.Max(1, _dstChannels) * 2;
+        if (_queue.Count > cap)
+        {
+            int drop = _queue.Count - (cap / 2);
+            while (drop-- > 0 && _queue.TryDequeue(out _))
+            {
+            }
+        }
+
         foreach (float s in dst)
         {
             _queue.Enqueue(s);
@@ -242,6 +257,7 @@ internal sealed class MicRouter : IDisposable
     {
         try
         {
+            int srcChannels = Math.Max(1, _srcChannels);
             var byteBuffer = new byte[480 * _dstChannels * _dstBytesPerSample];
             while (!_stop)
             {
@@ -251,19 +267,23 @@ internal sealed class MicRouter : IDisposable
                     _renderer.WaitForPacket(200);
                     continue;
                 }
-                int frames = Math.Min(free, 480);
-                int needed = frames * _dstChannels;
-                if (_queue.Count < needed)
+                // 队列里是「帧 × 捕获声道数」交错的浮点样本：必须先按捕获声道数换算可消费帧数，
+                // 再交给 PackSamples 做上混/下混。旧写法直接按目标声道数取样本，单声道麦克风(1ch)
+                // 送立体声虚拟设备(2ch)时会 2 倍速播放并持续欠载。
+                int availableFrames = _queue.Count / srcChannels;
+                if (availableFrames <= 0)
                 {
                     Thread.Sleep(5);
                     continue;
                 }
+                int frames = Math.Min(Math.Min(free, 480), availableFrames);
+                int needed = frames * srcChannels;
                 var src = new float[needed];
                 for (int i = 0; i < needed; i++)
                 {
                     _queue.TryDequeue(out src[i]);
                 }
-                SoundPadService.PackSamples(src, _dstChannels, byteBuffer, frames, _dstChannels, _dstFloat, _dstBytesPerSample, 1f);
+                SoundPadService.PackSamples(src, srcChannels, byteBuffer, frames, _dstChannels, _dstFloat, _dstBytesPerSample, 1f);
                 var handle = GCHandle.Alloc(byteBuffer, GCHandleType.Pinned);
                 try
                 {
