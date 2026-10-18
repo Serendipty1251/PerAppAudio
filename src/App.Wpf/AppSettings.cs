@@ -67,6 +67,12 @@ public sealed class AppSettings
     /// <summary>Numpad 索引热键：小键盘 1–9 播放第 N 个音效（默认关闭，避免占用游戏小键盘）。</summary>
     public bool SoundpadNumpadIndex { get; set; }
 
+    /// <summary>
+    /// 把虚拟麦克风设为系统默认前的原默认录音端点（role → deviceId），用于「恢复原麦克风」。
+    /// 仅在首次设置默认麦克风时记录，避免把虚拟麦自身当成原默认。
+    /// </summary>
+    public Dictionary<string, string> SoundpadPrevMicDefaults { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+
     /// <summary>编辑器中最近打开的音效 key（用于快捷重开）。</summary>
     public string? SoundpadEditorLast { get; set; }
 
@@ -130,6 +136,10 @@ public sealed class AppSettings
 
         // Block voice 与「混入人声」互为反义：以 Block voice 为准，修正可能不一致的旧配置。
         SoundpadMixMic = !SoundpadBlockVoice;
+
+        // 旧配置可能缺少/显式写成 null
+        SoundpadPrevMicDefaults ??= new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        SoundpadHotkeys ??= new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
     }
 
     public void Save()

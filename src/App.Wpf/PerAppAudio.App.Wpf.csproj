@@ -34,7 +34,7 @@
     <AssemblyName>PerAppAudio</AssemblyName>
     <ApplicationIcon>app-icon.ico</ApplicationIcon>
     <RootNamespace>PerAppAudio.App.Wpf</RootNamespace>
-    <Version>0.5.2</Version>
+    <Version>0.5.3</Version>
     <Product>PerAppAudio</Product>
     <AssemblyTitle>PerAppAudio 每应用音频输出路由</AssemblyTitle>
   </PropertyGroup>

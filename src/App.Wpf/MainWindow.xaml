@@ -334,6 +334,11 @@
                                    Foreground="{StaticResource MutedBrush}"/>
                         <TextBox x:Name="SoundSearchBox" Width="160" VerticalAlignment="Center"
                                  TextChanged="SoundSearch_TextChanged"/>
+                        <Button x:Name="SetDefaultMicBtn" Content="{loc:Loc BtnSetDefaultMic}" Style="{StaticResource GhostButton}"
+                                Margin="16,0,0,0" Padding="8,3,8,3" FontSize="11" Click="SetDefaultMic_Click"/>
+                        <Button x:Name="RestoreDefaultMicBtn" Content="{loc:Loc BtnRestoreDefaultMic}" Style="{StaticResource GhostButton}"
+                                Margin="6,0,0,0" Padding="8,3,8,3" FontSize="11" Click="RestoreDefaultMic_Click"
+                                Visibility="Collapsed"/>
                     </StackPanel>
 
                     <!-- 工具条 3：高级开关 -->

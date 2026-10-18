@@ -1442,6 +1442,99 @@ public partial class MainWindow : Window
         RebuildHotkeys();
     }
 
+    /// <summary>
+    /// 把当前选中的虚拟麦克风设为系统默认录音设备（控制台/多媒体/通信）。
+    /// 这是「驱动级接管默认麦克风」在用户态的落地：之后所有按默认设备取音的应用都会收到我们的混音。
+    /// </summary>
+    private void SetDefaultMic_Click(object sender, RoutedEventArgs e)
+    {
+        string? micId = SoundPadService.ResolveMicDeviceId(
+            DeviceNaming.Bare(SoundpadMicDeviceBox.SelectedItem as string ?? _settings.SoundpadMicDevice));
+        if (micId is null)
+        {
+            ShowMicHint(true);
+            return;
+        }
+
+        string name = SoundpadMicDeviceBox.SelectedItem as string ?? _settings.SoundpadMicDevice;
+        var answer = System.Windows.MessageBox.Show(
+            string.Format(L10n.Get("MsgSetDefaultMic"), name),
+            "PerAppAudio", MessageBoxButton.YesNo, MessageBoxImage.Question);
+        if (answer != MessageBoxResult.Yes)
+        {
+            return;
+        }
+
+        // 首次改动前记录原默认（每个角色可能不同），供一键恢复
+        if (_settings.SoundpadPrevMicDefaults.Count == 0)
+        {
+            foreach (var role in new[] { ERole.Console, ERole.Multimedia, ERole.Communications })
+            {
+                string? id = PolicyConfig.GetDefaultCaptureId(role);
+                if (!string.IsNullOrEmpty(id))
+                {
+                    _settings.SoundpadPrevMicDefaults[RoleKey(role)] = id;
+                }
+            }
+            _settings.Save();
+            RestoreDefaultMicBtn.Visibility = Visibility.Visible;
+        }
+
+        int hr = PolicyConfig.SetDefaultEndpointAllRoles(micId);
+        if (hr >= 0)
+        {
+            AppendLog($"[音板] 已把「{name}」设为系统默认麦克风（控制台/多媒体/通信）");
+            Osd(L10n.Get("OsdDefaultMicSet"), "🎙");
+        }
+        else
+        {
+            AppendLog($"[音板] 设置默认麦克风失败: 0x{hr:X8}");
+            System.Windows.MessageBox.Show(string.Format(L10n.Get("MsgSetDefaultMicFail"), $"0x{hr:X8}"),
+                "PerAppAudio", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+    }
+
+    /// <summary>恢复到设置默认麦克风之前的原设备（按角色分别恢复）。</summary>
+    private void RestoreDefaultMic_Click(object sender, RoutedEventArgs e)
+    {
+        int ok = 0;
+        int failed = 0;
+        foreach (var (key, id) in _settings.SoundpadPrevMicDefaults.ToList())
+        {
+            ERole? role = key switch
+            {
+                "console" => ERole.Console,
+                "multimedia" => ERole.Multimedia,
+                "communications" => ERole.Communications,
+                _ => null,
+            };
+            if (role is null || string.IsNullOrEmpty(id))
+            {
+                continue;
+            }
+            if (PolicyConfig.SetDefaultEndpoint(id, role.Value) >= 0)
+            {
+                ok++;
+            }
+            else
+            {
+                failed++;
+            }
+        }
+
+        AppendLog($"[音板] 恢复原默认麦克风：成功 {ok}，失败 {failed}");
+        _settings.SoundpadPrevMicDefaults.Clear();
+        _settings.Save();
+        RestoreDefaultMicBtn.Visibility = Visibility.Collapsed;
+    }
+
+    private static string RoleKey(ERole role) => role switch
+    {
+        ERole.Multimedia => "multimedia",
+        ERole.Communications => "communications",
+        _ => "console",
+    };
+
     /// <summary>打开系统声音设置——虚拟麦克风需在系统里设为默认录音设备（用户态无法程序化切换默认输入）。</summary>
     private void OpenSoundSettings_Click(object sender, RoutedEventArgs e)
     {
@@ -1614,6 +1707,9 @@ public partial class MainWindow : Window
                     string.Equals(DeviceNaming.Bare(d), _settings.SoundpadDevice, StringComparison.OrdinalIgnoreCase));
             }
             RefreshMicDevices();
+            RestoreDefaultMicBtn.Visibility = _settings.SoundpadPrevMicDefaults.Count > 0
+                ? Visibility.Visible
+                : Visibility.Collapsed;
             SoundpadVolumeSlider.Value = _settings.SoundpadVolume;
             SoundpadVolumeText.Text = $"{(int)(_settings.SoundpadVolume * 100)}%";
 
