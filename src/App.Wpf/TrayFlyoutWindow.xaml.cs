@@ -38,7 +38,7 @@ public partial class TrayFlyoutWindow : Window
     public TrayFlyoutWindow()
     {
         // 定时器先于 InitializeComponent 创建（与 MainWindow 同样的 XAML 初始化期约束）
-        _refreshTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(3) };
+        _refreshTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(5) };
         _dismissTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(300) };
 
         InitializeComponent();

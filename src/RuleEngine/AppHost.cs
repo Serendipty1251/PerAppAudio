@@ -20,6 +20,7 @@ public sealed class AppHost : IDisposable
     private Task? _scanLoop;
     private DeviceEventService? _deviceEvents;
     private volatile bool _disposed;
+    private string _lastRoutesSignature = string.Empty;
 
     private BackendProbeResult _probeA = new(false, "未探测");
     private BackendProbeResult _probeB2 = new(false, "未探测");
@@ -100,7 +101,16 @@ public sealed class AppHost : IDisposable
             try
             {
                 ScanAndApply();
-                RoutesChanged?.Invoke();
+
+                // 变化才通知：UI 每次全量刷新约 300ms（会话枚举），
+                // 无条件每 2s 触发会把 UI 线程长期占掉 ~15%（表现为持续卡顿）。
+                // 签名 = 持久路由 + 活动链路；看门狗拆链后下一轮扫描即可感知（≤2s）。
+                string signature = BuildRoutesSignature();
+                if (!string.Equals(signature, _lastRoutesSignature, StringComparison.Ordinal))
+                {
+                    _lastRoutesSignature = signature;
+                    RoutesChanged?.Invoke();
+                }
             }
             catch (Exception ex)
             {
@@ -116,6 +126,25 @@ public sealed class AppHost : IDisposable
                 break;
             }
         }
+    }
+
+    /// <summary>路由集合签名（持久路由 + 活动链路的关键字段拼接）。</summary>
+    private string BuildRoutesSignature()
+    {
+        var sb = new System.Text.StringBuilder();
+        foreach (var r in _store.Routes)
+        {
+            sb.Append(r.ProcessPath).Append('|').Append(r.DeviceName).Append('|')
+                .Append((int)r.Mode).Append('|').Append(r.Volume.ToString("F2")).Append('|')
+                .Append(r.Mute).Append(';');
+        }
+        sb.Append('#');
+        foreach (var l in _coordinator.GetLiveRoutes())
+        {
+            sb.Append(l.ProcessId).Append('|').Append(l.TargetDevice).Append('|')
+                .Append(l.LoopbackActive).Append('|').Append(l.EndpointApplied).Append(';');
+        }
+        return sb.ToString();
     }
 
     /// <summary>对路由表中每个运行中的匹配进程应用路由（已应用同一 PID 的跳过）。</summary>

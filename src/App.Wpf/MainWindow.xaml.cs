@@ -22,6 +22,9 @@ public partial class MainWindow : Window
 {
     private readonly AppHost _host;
     private readonly DispatcherTimer _refreshTimer;
+    private readonly DispatcherTimer _refreshCoalesce;
+    private readonly DispatcherTimer _volumeDebounce;
+    private RouteRow? _volumePendingRow;
     private readonly ObservableCollection<RouteRow> _rows = new();
     private readonly ObservableCollection<SessionRow> _sessions = new();
     private readonly ObservableCollection<LiveRouteRow> _liveRows = new();
@@ -40,6 +43,12 @@ public partial class MainWindow : Window
         // 会在解析阶段立即触发 Checked 事件，其处理器会访问本定时器。
         // 自动刷新默认关闭（IsChecked="False"），间隔 10s：避免抢焦点/打扰用户选设备。
         _refreshTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(10) };
+        // 刷新合并尾沿定时器（300ms）：扫描/设备事件连续到达时只刷一次
+        _refreshCoalesce = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(300) };
+        _refreshCoalesce.Tick += RefreshCoalesce_Tick;
+        // 音量滑条防抖（150ms）：拖动过程中连续 ValueChanged 会引发 apply 风暴
+        _volumeDebounce = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(150) };
+        _volumeDebounce.Tick += VolumeDebounce_Tick;
         InitializeComponent();
         _host = ((App)System.Windows.Application.Current).Host;
 
@@ -51,8 +60,8 @@ public partial class MainWindow : Window
         ProfileBox.ItemsSource = _host.Rules.Profiles.Select(p => p.Name).ToList();
 
         _host.Log += AppendLogThreadSafe;
-        _host.RoutesChanged += RefreshThreadSafe;
-        _host.DeviceListChanged += RefreshThreadSafe;
+        _host.RoutesChanged += ScheduleRefresh;
+        _host.DeviceListChanged += ScheduleRefresh;
 
         _refreshTimer.Tick += (_, _) => Refresh();
 
@@ -303,19 +312,41 @@ public partial class MainWindow : Window
         Refresh();
     }
 
+    // ---------- 刷新合并（UI 卡顿修复） ----------
+
+    /// <summary>
+    /// 非用户触发的刷新统一走这里：300ms 尾沿合并。
+    /// 全量刷新约 300ms（会话枚举），扫描/设备事件/看门狗可能连续到达，
+    /// 直接刷会让 UI 线程被反复占满——合并后一次burst只刷一次。
+    /// </summary>
+    private void ScheduleRefresh()
+    {
+        if (_refreshCoalesce.IsEnabled)
+        {
+            return;
+        }
+        _refreshCoalesce.Start();
+    }
+
+    private void RefreshCoalesce_Tick(object? sender, EventArgs e)
+    {
+        _refreshCoalesce.Stop();
+        Refresh();
+    }
+
     // ---------- 路由行操作 ----------
 
     private RouteRow? RowFromSender(object sender) =>
         (sender as FrameworkElement)?.DataContext as RouteRow;
 
-    private void PersistRow(RouteRow row)
+    private Task PersistRow(RouteRow row)
     {
         _host.Store.Upsert(row.Route);
-        ApplyToRunning(row);
+        return ApplyToRunning(row);
     }
 
-    /// <summary>行改动立即对运行中匹配进程生效。</summary>
-    private void ApplyToRunning(RouteRow row)
+    /// <summary>行改动立即对运行中匹配进程生效（异步，不阻塞 UI 线程）。</summary>
+    private async Task ApplyToRunning(RouteRow row)
     {
         foreach (var process in ProcessFinder.Find(row.Route.ProcessPath))
         {
@@ -328,7 +359,7 @@ public partial class MainWindow : Window
                     new AudioDeviceRef(device.FriendlyName, device.Id),
                     row.Route.Volume,
                     row.Route.Mute);
-                var report = _host.Coordinator.ApplyRouteAsync(command, row.Route.Mode).GetAwaiter().GetResult();
+                var report = await _host.Coordinator.ApplyRouteAsync(command, row.Route.Mode);
                 AppendLog($"[改] {row.ProcessName} → {row.Route.DeviceName} [{row.Route.Mode}] vol {row.Route.Volume:F2} | " +
                     $"B2 {(report.EndpointApplied ? "✅" : "❌")} A {(report.LoopbackActive ? "✅" : "❌")}");
             }
@@ -336,7 +367,7 @@ public partial class MainWindow : Window
         Refresh();
     }
 
-    private void Device_Changed(object sender, SelectionChangedEventArgs e)
+    private async void Device_Changed(object sender, SelectionChangedEventArgs e)
     {
         var row = RowFromSender(sender);
         if (row is null || row.Route.DeviceName == (sender as ComboBox)?.SelectedItem as string)
@@ -347,10 +378,10 @@ public partial class MainWindow : Window
         row.Route.DeviceName = (string)((ComboBox)sender).SelectedItem;
         var device = DeviceManager.ResolveDevice(row.Route.DeviceName);
         row.Route.DeviceId = device.Id;
-        PersistRow(row);
+        await PersistRow(row);
     }
 
-    private void Mode_Changed(object sender, SelectionChangedEventArgs e)
+    private async void Mode_Changed(object sender, SelectionChangedEventArgs e)
     {
         var row = RowFromSender(sender);
         if (row is null)
@@ -365,9 +396,10 @@ public partial class MainWindow : Window
         }
 
         row.Route.Mode = ParseMode(newMode);
-        PersistRow(row);
+        await PersistRow(row);
     }
 
+    /// <summary>音量滑条：只更新绑定值，150ms 防抖后才真正应用（避免拖动时 apply 风暴）。</summary>
     private void Volume_Changed(object sender, RoutedPropertyChangedEventArgs<double> e)
     {
         var row = RowFromSender(sender);
@@ -377,7 +409,20 @@ public partial class MainWindow : Window
         }
 
         row.Route.Volume = (float)e.NewValue;
-        PersistRow(row);
+        _volumePendingRow = row;
+        _volumeDebounce.Stop();
+        _volumeDebounce.Start();
+    }
+
+    private async void VolumeDebounce_Tick(object? sender, EventArgs e)
+    {
+        _volumeDebounce.Stop();
+        if (_volumePendingRow is not { } row)
+        {
+            return;
+        }
+        _volumePendingRow = null;
+        await PersistRow(row);
     }
 
     private async void Remove_Click(object sender, RoutedEventArgs e)
@@ -407,7 +452,7 @@ public partial class MainWindow : Window
 
     // ---------- 场景 ----------
 
-    private void ApplySession_Click(object sender, RoutedEventArgs e)
+    private async void ApplySession_Click(object sender, RoutedEventArgs e)
     {
         var row = (sender as FrameworkElement)?.DataContext as SessionRow;
         if (row is null || row.ProcessId <= 0)
@@ -435,7 +480,7 @@ public partial class MainWindow : Window
 
         var command = new RoutingCommand(row.ProcessId, processPath,
             new AudioDeviceRef(device.FriendlyName, device.Id), row.Volume, false);
-        var report = _host.Coordinator.ApplyRouteAsync(command, RoutingMode.Auto).GetAwaiter().GetResult();
+        var report = await _host.Coordinator.ApplyRouteAsync(command, RoutingMode.Auto);
         AppendLog($"[应用] {row.ProcessName}（PID {row.ProcessId}）→ {device.FriendlyName} vol {row.Volume:F2} | " +
             $"B2 {(report.EndpointApplied ? "✅" : "❌")} A {(report.LoopbackActive ? "✅" : "❌")}");
         Refresh();
@@ -754,7 +799,7 @@ public partial class MainWindow : Window
         _logView?.Refresh();
     }
 
-    private void ReapplyAll_Click(object sender, RoutedEventArgs e)
+    private async void ReapplyAll_Click(object sender, RoutedEventArgs e)
     {
         foreach (var stored in _host.Store.Routes)
         {
@@ -765,7 +810,7 @@ public partial class MainWindow : Window
                     var device = DeviceManager.ResolveDevice(stored.DeviceName);
                     var command = new RoutingCommand(process.Id, stored.ProcessPath,
                         new AudioDeviceRef(device.FriendlyName, device.Id), stored.Volume, stored.Mute);
-                    var report = _host.Coordinator.ApplyRouteAsync(command, stored.Mode).GetAwaiter().GetResult();
+                    var report = await _host.Coordinator.ApplyRouteAsync(command, stored.Mode);
                     AppendLog($"[重应用] {Path.GetFileName(stored.ProcessPath)}（PID {process.Id}）→ {device.FriendlyName} | " +
                         $"B2 {(report.EndpointApplied ? "✅" : "❌")} A {(report.LoopbackActive ? "✅" : "❌")}");
                 }
