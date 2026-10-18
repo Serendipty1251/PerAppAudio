@@ -2,7 +2,7 @@
 
 让 Windows 上每个应用程序独立选择音频输出设备的开源工具——打破"所有声音只有一个默认输出"的系统限制。
 
-- 状态：**成品可交付**（2026-10-16；托盘壳 + 常驻协调上线，单文件 exe 已发布至 `dist/PerAppAudio/`）
+- 状态：**成品可交付**（2026-10-18；托盘壳 + 常驻协调 + 热键/OSD/托盘面板/设备事件触发上线，单文件 exe 已发布至 `dist/PerAppAudio/`）
 - 仓库：https://github.com/Serendipty1251/PerAppAudio
 - 平台：Windows 10 2004+ / 11（首版唯一平台；Linux / macOS 远期）
 - **下载**：[GitHub Releases → v0.4.0](https://github.com/Serendipty1251/PerAppAudio/releases/tag/v0.4.0)（`PerAppAudio.exe` 单文件，免安装）
@@ -102,12 +102,15 @@ dotnet publish src/App.Cli -c Release -r win-x64 --self-contained true \
     -p:PublishSingleFile=true -p:EnableCompressionInSingleFile=true -o dist/PerAppAudio
 ```
 
-- 主程序 `PerAppAudio.exe`：单实例托盘常驻（AppHost：探测 + 看门狗 + 2s 扫描自动应用）；主窗口三页：
-  - **「正在播放」**：自动检测系统中有音频会话的应用（2 秒刷新），选设备/音量 → 一键改道并持久化；
-  - 「路由表」：持久路由编辑（设备下拉 / 手段 / 音量滑条 / 移除）；
-  - 「日志」：常驻协调日志。关窗即最小化到托盘。
-- 诊断 `PerAppAudio.Cli.exe`：devices / sessions / sessionvol / ctl / profile 全套命令。
-- 数据在 `%APPDATA%\PerAppAudio\`（routes.json / rules.yaml / app.log）。
+- 主程序 `PerAppAudio.exe`：单实例托盘常驻（AppHost：探测 + 看门狗 + 2s 扫描自动应用 + 设备事件订阅）；主窗口五页：
+  - **「正在播放」**：自动检测系统中有音频会话的应用（默认 10s 刷新），选设备/音量 → 一键改道并持久化；
+  - 「路由表」：持久路由编辑（设备下拉 / 手段 / 音量滑条 / 移除；删除时自动拆活动链路）；
+  - 「活动链路」：实时路由快照 + 单链断开；
+  - 「日志」：搜索 + 级别过滤；
+  - 「设置」：开机自启 / OSD / 刷新策略 / 6 个全局热键配置。
+  - 关窗即最小化到托盘；**左键托盘图标**（或 Ctrl+Alt+F）弹出快捷面板（会话快切 / 场景 / 退出）。
+- 诊断 `PerAppAudio.Cli.exe`：devices / sessions / sessionvol / mic / ctl / profile 全套命令。
+- 数据在 `%APPDATA%\PerAppAudio\`（routes.json / rules.yaml / ui.json / app.log）。
 
 ## 会话枚举修复（2026-10-16 晚间，重要技术决策）
 
