@@ -112,8 +112,8 @@ public partial class App : System.Windows.Application
             Hotkeys = HotkeyManager.TryCreate(_window, _window.DispatchHotkey);
             if (Hotkeys is { } hk)
             {
-                var (ok, failed) = hk.RegisterAll(Settings);
-                string msg = $"[热键] 已注册 {ok}/6";
+                var (ok, failed) = hk.RegisterAll(Settings, Settings.SoundpadPassthrough);
+                string msg = $"[热键] 已注册 {ok} 个";
                 if (failed.Count > 0)
                 {
                     msg += "，失败：" + string.Join("、", failed);

@@ -40,11 +40,41 @@ public sealed class AppSettings
     /// <summary>音板总音量 0–1。</summary>
     public float SoundpadVolume { get; set; } = 0.8f;
 
-    /// <summary>每音效热键：音效名（不含扩展名）→ 组合键串，如 "Ctrl+Alt+1"。</summary>
+    /// <summary>每音效热键：音效 key（分类/名称）→ 组合键串，如 "Ctrl+Alt+1"。</summary>
     public Dictionary<string, string> SoundpadHotkeys { get; set; } = new(StringComparer.OrdinalIgnoreCase);
 
-    /// <summary>开启循环播放的音效名集合。</summary>
+    /// <summary>开启循环播放的音效 key 集合。</summary>
     public List<string> SoundpadLoops { get; set; } = new();
+
+    /// <summary>Hotbar 置顶收藏的音效 key 集合（顺序即展示顺序）。</summary>
+    public List<string> SoundpadHotbar { get; set; } = new();
+
+    /// <summary>音量归一化：播放前按峰值增益把各音效对齐到相近响度。</summary>
+    public bool SoundpadNormalize { get; set; } = true;
+
+    /// <summary>Block voice：麦克风模式只送音效、不转发真实麦克风（默认 true）。为 false 时启动混音路由转发人声。</summary>
+    public bool SoundpadBlockVoice { get; set; } = true;
+
+    /// <summary>混入人声：麦克风模式下捕获真实默认麦克风并混音到虚拟麦克风（与 Block voice 互斥；默认 false）。</summary>
+    public bool SoundpadMixMic { get; set; }
+
+    /// <summary>透传热键：音板热键/特殊热键用低层键盘钩子，触发后不吞键，前台游戏也能收到同键。</summary>
+    public bool SoundpadPassthrough { get; set; }
+
+    /// <summary>索引热键：Alt+数字 / Ctrl+Alt+数字 播放当前列表第 N 个音效。</summary>
+    public bool SoundpadIndexHotkeys { get; set; } = true;
+
+    /// <summary>编辑器中最近打开的音效 key（用于快捷重开）。</summary>
+    public string? SoundpadEditorLast { get; set; }
+
+    // ---- 音板特殊热键（空串 = 禁用）----
+    public string SoundpadHkStopAll { get; set; } = "Ctrl+Alt+End";
+    public string SoundpadHkPause { get; set; } = "Ctrl+Alt+Home";
+    public string SoundpadHkRandom { get; set; } = "Ctrl+Alt+R";
+    public string SoundpadHkPrevious { get; set; } = "Ctrl+Alt+Left";
+    public string SoundpadHkVolumeUp { get; set; } = "Ctrl+Alt+Add";
+    public string SoundpadHkVolumeDown { get; set; } = "Ctrl+Alt+Subtract";
+    public string SoundpadHkMode { get; set; } = "Ctrl+Alt+M";
 
     // ---- 全局热键（空字符串 = 禁用该热键）----
     public string HotkeyNextOutput { get; set; } = "Ctrl+Alt+Right";

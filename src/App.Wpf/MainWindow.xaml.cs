@@ -26,6 +26,9 @@ public partial class MainWindow : Window
     private readonly DispatcherTimer _refreshCoalesce;
     private readonly DispatcherTimer _volumeDebounce;
     private readonly SoundPadService _soundpad = new();
+    private List<SoundItem> _soundList = new();
+    private readonly List<string> _recentlyPlayed = new();
+    private KeyboardHook? _kbdHook;
     private RouteRow? _volumePendingRow;
     private readonly ObservableCollection<RouteRow> _rows = new();
     private readonly ObservableCollection<SessionRow> _sessions = new();
@@ -81,7 +84,7 @@ public partial class MainWindow : Window
         LoadSettingsPage();
 
         Loaded += (_, _) => { RestoreWindowGeometry(); Refresh(); RefreshSoundButtons(); };
-        Closed += (_, _) => { SaveWindowGeometry(); _soundpad.Dispose(); };
+        Closed += (_, _) => { SaveWindowGeometry(); _soundpad.Dispose(); _kbdHook?.Dispose(); };
         Closing += Window_Closing;
 
         // 音板播放状态变化（播放线程触发 → marshalling 回 UI 线程刷新按钮高亮）
@@ -641,20 +644,35 @@ public partial class MainWindow : Window
         }
     }
 
-    /// <summary>热键分发（HotkeyManager 回调，可能在非 UI 线程——全部 Dispatcher 回来）。</summary>
+    /// <summary>热键分发（HotkeyManager / KeyboardHook 回调，可能在非 UI 线程——全部 Dispatcher 回来）。</summary>
     public void DispatchHotkey(int id)
     {
         Dispatcher.BeginInvoke(DispatcherPriority.Background, () =>
         {
-            // 音板热键（ID >= 100）：按音效名播放/停止
-            if (App.Hotkeys is { } mgr && mgr.IsSoundpadHotkey(id))
+            if (App.Hotkeys is { } mgr)
             {
-                string? name = mgr.GetSoundpadName(id);
-                if (name is not null)
+                // 音板每音效热键（ID >= 100）：按 key 播放/停止
+                if (mgr.IsSoundpadHotkey(id))
                 {
-                    PlaySoundByName(name);
+                    string? name = mgr.GetSoundpadName(id);
+                    if (name is not null)
+                    {
+                        PlaySoundByName(name);
+                    }
+                    return;
                 }
-                return;
+                // 特殊热键
+                if (mgr.IsSpecialHotkey(id))
+                {
+                    HandleSpecialHotkey(id);
+                    return;
+                }
+                // 索引热键（Alt/ Ctrl+Alt + 数字）
+                if (mgr.IsIndexHotkey(id, out int idx))
+                {
+                    PlaySoundByIndex(idx);
+                    return;
+                }
             }
 
             switch (id)
@@ -667,6 +685,101 @@ public partial class MainWindow : Window
                 case HotkeyManager.IdShowFlyout: TrayFlyoutWindow.ShowAtTray(); break;
             }
         });
+    }
+
+    private void HandleSpecialHotkey(int id)
+    {
+        switch (id)
+        {
+            case HotkeyManager.IdSpStopAll:
+                _soundpad.StopAll();
+                AppendLog("[音板] 特殊热键：停止全部");
+                break;
+            case HotkeyManager.IdSpPause:
+                _soundpad.TogglePauseAll();
+                AppendLog(_soundpad.IsAnyPaused() ? "[音板] 特殊热键：已暂停" : "[音板] 特殊热键：已恢复");
+                break;
+            case HotkeyManager.IdSpRandom:
+                PlayRandom();
+                break;
+            case HotkeyManager.IdSpPrevious:
+                PlayPrevious();
+                break;
+            case HotkeyManager.IdSpVolumeUp:
+                ChangeSoundpadVolume(+0.05f);
+                break;
+            case HotkeyManager.IdSpVolumeDown:
+                ChangeSoundpadVolume(-0.05f);
+                break;
+            case HotkeyManager.IdSpMode:
+                CycleSoundpadMode();
+                break;
+        }
+    }
+
+    private void ChangeSoundpadVolume(float delta)
+    {
+        _settings.SoundpadVolume = (float)Math.Clamp(_settings.SoundpadVolume + delta, 0, 1);
+        _settings.Save();
+        SoundpadVolumeSlider.Value = _settings.SoundpadVolume;
+        SoundpadVolumeText.Text = $"{(int)(_settings.SoundpadVolume * 100)}%";
+        AppendLog($"[音板] 音量 = {(int)(_settings.SoundpadVolume * 100)}%");
+    }
+
+    private void CycleSoundpadMode()
+    {
+        int mode = (SoundpadModeBox.SelectedIndex + 1) % 3;
+        SoundpadModeBox.SelectedIndex = mode;
+        _settings.SoundpadMode = mode;
+        _settings.Save();
+        UpdateMicHint();
+        UpdateMicRouter();
+        AppendLog($"[音板] 模式切换 → {L10n.Get(mode == 0 ? "SpModeSpeakers" : mode == 1 ? "SpModeMic" : "SpModeBoth")}");
+    }
+
+    private void PlaySoundByIndex(int n)
+    {
+        if (n < 1 || n > _soundList.Count)
+        {
+            return;
+        }
+        PlaySound(_soundList[n - 1]);
+    }
+
+    private void PlayRandom()
+    {
+        if (_soundList.Count == 0)
+        {
+            return;
+        }
+        var rnd = new Random();
+        PlaySound(_soundList[rnd.Next(_soundList.Count)]);
+    }
+
+    private void PlayPrevious()
+    {
+        // 最近播放栈：倒数第二个即「上一个」
+        int count = _recentlyPlayed.Count;
+        if (count < 2)
+        {
+            return;
+        }
+        string prev = _recentlyPlayed[count - 2];
+        var sound = _soundList.FirstOrDefault(s => string.Equals(s.Key, prev, StringComparison.OrdinalIgnoreCase));
+        if (sound is not null)
+        {
+            PlaySound(sound);
+        }
+    }
+
+    private void PushRecent(string key)
+    {
+        _recentlyPlayed.RemoveAll(x => string.Equals(x, key, StringComparison.OrdinalIgnoreCase));
+        _recentlyPlayed.Add(key);
+        if (_recentlyPlayed.Count > 32)
+        {
+            _recentlyPlayed.RemoveAt(0);
+        }
     }
 
     private void Osd(string message, string icon)
@@ -829,21 +942,28 @@ public partial class MainWindow : Window
         ShowMicHint(micNeeded && !hasMic);
     }
 
-    /// <summary>重建音板按钮网格（含右键热键 / 循环菜单、循环标记）。</summary>
+    /// <summary>重建音板按钮网格（含分类/搜索过滤、右键菜单：热键 / 循环 / 钉置顶 / 编辑）。</summary>
     private void RefreshSoundButtons()
     {
+        _soundList = _soundpad.Rescan().ToList();
+        RefreshHotbar();
+
         SoundButtons.Children.Clear();
-        var sounds = _soundpad.Rescan();
+        string q = (SoundSearchBox?.Text ?? string.Empty).Trim();
+        var sounds = string.IsNullOrEmpty(q)
+            ? _soundList
+            : _soundList.Where(s => s.DisplayName.Contains(q, StringComparison.OrdinalIgnoreCase)).ToList();
 
         foreach (var sound in sounds)
         {
-            bool playing = _soundpad.IsPlaying(sound.Name);
-            bool loop = _settings.SoundpadLoops.Contains(sound.Name, StringComparer.OrdinalIgnoreCase);
-            _settings.SoundpadHotkeys.TryGetValue(sound.Name, out var hotkey);
+            bool playing = _soundpad.IsPlaying(sound.Key);
+            bool loop = _settings.SoundpadLoops.Contains(sound.Key, StringComparer.OrdinalIgnoreCase);
+            bool pinned = _settings.SoundpadHotbar.Contains(sound.Key, StringComparer.OrdinalIgnoreCase);
+            _settings.SoundpadHotkeys.TryGetValue(sound.Key, out var hotkey);
 
             var button = new WpfButton
             {
-                Content = loop ? sound.Name + " [循环]" : sound.Name,
+                Content = (loop ? "[循环] " : string.Empty) + sound.DisplayName,
                 Style = (Style)FindResource(playing ? "PrimaryButton" : "GhostButton"),
                 Padding = new Thickness(14, 8, 14, 8),
                 Margin = new Thickness(0, 0, 8, 8),
@@ -858,22 +978,95 @@ public partial class MainWindow : Window
             var menu = new ContextMenu();
             var hkItem = new MenuItem
             {
-                Header = string.IsNullOrEmpty(hotkey) ? "设置热键…" : $"热键：{hotkey}（点击修改）",
+                Header = string.IsNullOrEmpty(hotkey) ? L10n.Get("SpPin") + "…" : $"热键：{hotkey}",
             };
+            // 注：上面 Header 仅占位，下面用更准确的文案
+            hkItem.Header = string.IsNullOrEmpty(hotkey) ? "设置热键…" : $"热键：{hotkey}（点击修改）";
             hkItem.Click += (_, _) => OpenSoundHotkey(sound);
-            var loopItem = new MenuItem
-            {
-                Header = loop ? "关闭循环播放" : "开启循环播放",
-            };
+
+            var loopItem = new MenuItem { Header = loop ? "关闭循环播放" : "开启循环播放" };
             loopItem.Click += (_, _) => ToggleSoundLoop(sound);
+
+            var pinItem = new MenuItem { Header = pinned ? L10n.Get("SpUnpin") : L10n.Get("SpPin") };
+            pinItem.Click += (_, _) => ToggleHotbarPin(sound);
+
+            var editItem = new MenuItem { Header = L10n.Get("SpEdit") };
+            editItem.Click += (_, _) => OpenEditor(sound);
+
             menu.Items.Add(hkItem);
             menu.Items.Add(loopItem);
+            menu.Items.Add(pinItem);
+            menu.Items.Add(editItem);
             button.ContextMenu = menu;
 
             SoundButtons.Children.Add(button);
         }
 
-        SoundpadEmptyHint.Visibility = sounds.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+        SoundpadEmptyHint.Visibility = _soundList.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    /// <summary>重建置顶收藏栏。</summary>
+    private void RefreshHotbar()
+    {
+        if (HotbarPanel is null)
+        {
+            return;
+        }
+        HotbarPanel.Children.Clear();
+        foreach (var key in _settings.SoundpadHotbar.ToList())
+        {
+            var sound = _soundpad.Rescan().FirstOrDefault(s => string.Equals(s.Key, key, StringComparison.OrdinalIgnoreCase));
+            if (sound is null)
+            {
+                _settings.SoundpadHotbar.Remove(key);
+                continue;
+            }
+            bool playing = _soundpad.IsPlaying(sound.Key);
+            var button = new WpfButton
+            {
+                Content = sound.DisplayName,
+                Style = (Style)FindResource(playing ? "PrimaryButton" : "GhostButton"),
+                Padding = new Thickness(10, 5, 10, 5),
+                Margin = new Thickness(0, 0, 6, 6),
+                FontSize = 11,
+                Tag = sound,
+            };
+            button.Click += SoundButton_Click;
+            var menu = new ContextMenu();
+            var unpin = new MenuItem { Header = L10n.Get("SpUnpin") };
+            unpin.Click += (_, _) => ToggleHotbarPin(sound);
+            menu.Items.Add(unpin);
+            button.ContextMenu = menu;
+            HotbarPanel.Children.Add(button);
+        }
+        if (_settings.SoundpadHotbar.Count == 0)
+        {
+            HotbarPanel.Children.Add(new TextBlock
+            {
+                Text = L10n.Get("SpHotbar"),
+                Foreground = (System.Windows.Media.Brush)FindResource("MutedBrush"),
+                FontSize = 11,
+                Margin = new Thickness(0, 2, 0, 0),
+            });
+        }
+    }
+
+    private void ToggleHotbarPin(SoundItem sound)
+    {
+        var list = _settings.SoundpadHotbar;
+        if (list.Contains(sound.Key, StringComparer.OrdinalIgnoreCase))
+        {
+            list.RemoveAll(x => string.Equals(x, sound.Key, StringComparison.OrdinalIgnoreCase));
+            AppendLog($"[音板] 取消置顶 {sound.DisplayName}");
+        }
+        else
+        {
+            list.Add(sound.Key);
+            AppendLog($"[音板] 已置顶 {sound.DisplayName}");
+        }
+        _settings.Save();
+        RefreshHotbar();
+        RefreshSoundButtons();
     }
 
     private void SoundButton_Click(object sender, RoutedEventArgs e)
@@ -888,9 +1081,9 @@ public partial class MainWindow : Window
     /// <summary>播放/停止一个音效（按当前模式与循环设置）。</summary>
     private void PlaySound(SoundItem sound)
     {
-        if (_soundpad.IsPlaying(sound.Name))
+        if (_soundpad.IsPlaying(sound.Key))
         {
-            _soundpad.Stop(sound.Name);
+            _soundpad.Stop(sound.Key);
             return;
         }
         PlayTargets? targets = ResolveSoundpadTargets();
@@ -898,15 +1091,18 @@ public partial class MainWindow : Window
         {
             return;
         }
-        bool loop = _settings.SoundpadLoops.Contains(sound.Name, StringComparer.OrdinalIgnoreCase);
+        bool loop = _settings.SoundpadLoops.Contains(sound.Key, StringComparer.OrdinalIgnoreCase);
         _soundpad.Toggle(sound, targets, _settings.SoundpadVolume, loop);
+        PushRecent(sound.Key);
     }
 
-    /// <summary>按音效名播放/停止（音板热键入口，自动从音效库匹配）。</summary>
-    private void PlaySoundByName(string name)
+    /// <summary>按音效 key 播放/停止（音板热键入口，自动从音效库匹配）。</summary>
+    private void PlaySoundByName(string key)
     {
-        var sound = _soundpad.Rescan().FirstOrDefault(s =>
-            string.Equals(s.Name, name, StringComparison.OrdinalIgnoreCase));
+        var sound = _soundList.FirstOrDefault(s =>
+            string.Equals(s.Key, key, StringComparison.OrdinalIgnoreCase))
+            ?? _soundpad.Rescan().FirstOrDefault(s =>
+                string.Equals(s.Key, key, StringComparison.OrdinalIgnoreCase));
         if (sound is null)
         {
             return;
@@ -916,39 +1112,39 @@ public partial class MainWindow : Window
 
     private void OpenSoundHotkey(SoundItem sound)
     {
-        _settings.SoundpadHotkeys.TryGetValue(sound.Name, out var existing);
-        var dlg = new HotkeyCaptureWindow(sound.Name, existing ?? string.Empty);
+        _settings.SoundpadHotkeys.TryGetValue(sound.Key, out var existing);
+        var dlg = new HotkeyCaptureWindow(sound.DisplayName, existing ?? string.Empty);
         if (dlg.ShowDialog() == true)
         {
             if (string.IsNullOrWhiteSpace(dlg.Gesture))
             {
-                _settings.SoundpadHotkeys.Remove(sound.Name);
+                _settings.SoundpadHotkeys.Remove(sound.Key);
             }
             else
             {
-                _settings.SoundpadHotkeys[sound.Name] = dlg.Gesture;
+                _settings.SoundpadHotkeys[sound.Key] = dlg.Gesture;
             }
             _settings.Save();
-            App.Hotkeys?.RegisterAll(App.Settings);
+            RebuildHotkeys();
             RefreshSoundButtons();
             AppendLog(string.IsNullOrWhiteSpace(dlg.Gesture)
-                ? $"[音板] 已清除 {sound.Name} 热键"
-                : $"[音板] {sound.Name} 热键 = {dlg.Gesture}");
+                ? $"[音板] 已清除 {sound.DisplayName} 热键"
+                : $"[音板] {sound.DisplayName} 热键 = {dlg.Gesture}");
         }
     }
 
     private void ToggleSoundLoop(SoundItem sound)
     {
         var loopSet = _settings.SoundpadLoops;
-        if (loopSet.Contains(sound.Name, StringComparer.OrdinalIgnoreCase))
+        if (loopSet.Contains(sound.Key, StringComparer.OrdinalIgnoreCase))
         {
-            loopSet.RemoveAll(x => string.Equals(x, sound.Name, StringComparison.OrdinalIgnoreCase));
-            AppendLog($"[音板] {sound.Name} {L10n.Get("SpLoopOff")}");
+            loopSet.RemoveAll(x => string.Equals(x, sound.Key, StringComparison.OrdinalIgnoreCase));
+            AppendLog($"[音板] {sound.DisplayName} {L10n.Get("SpLoopOff")}");
         }
         else
         {
-            loopSet.Add(sound.Name);
-            AppendLog($"[音板] {sound.Name} {L10n.Get("SpLoopOn")}");
+            loopSet.Add(sound.Key);
+            AppendLog($"[音板] {sound.DisplayName} {L10n.Get("SpLoopOn")}");
         }
         _settings.Save();
         RefreshSoundButtons();
@@ -982,7 +1178,8 @@ public partial class MainWindow : Window
         }
         _settings.SoundpadMode = SoundpadModeBox.SelectedIndex;
         _settings.Save();
-        ResolveSoundpadTargets(); // 立即重算麦克风可用性提示
+        UpdateMicHint();
+        UpdateMicRouter(); // 模式变化可能影响混音路由（仅麦克风/两者才需虚拟设备）
     }
 
     private void SoundpadDevice_Changed(object sender, SelectionChangedEventArgs e)
@@ -1006,7 +1203,7 @@ public partial class MainWindow : Window
             ? string.Empty
             : DeviceNaming.Bare(sel);
         _settings.Save();
-        ResolveSoundpadTargets();
+        UpdateMicRouter();
     }
 
     private void SoundpadVolume_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
@@ -1035,6 +1232,158 @@ public partial class MainWindow : Window
             : _settings.SoundpadMicDevice;
         SoundpadMicDeviceBox.SelectedItem = list.FirstOrDefault(x =>
             string.Equals(x, sel, StringComparison.OrdinalIgnoreCase)) ?? list[0];
+    }
+
+    /// <summary>高级开关（归一化 / Block voice / 混入人声 / 透传热键）变更。</summary>
+    private void SoundpadOption_Changed(object sender, RoutedEventArgs e)
+    {
+        if (_loadingSettings)
+        {
+            return;
+        }
+        _settings.SoundpadNormalize = NormalizeCheck.IsChecked == true;
+        _settings.SoundpadBlockVoice = BlockVoiceCheck.IsChecked == true;
+        _settings.SoundpadMixMic = MixMicCheck.IsChecked == true;
+        _settings.SoundpadPassthrough = PassthroughCheck.IsChecked == true;
+        // 互斥：混入人声与 Block voice 语义相反
+        if (MixMicCheck.IsChecked == true && BlockVoiceCheck.IsChecked == true)
+        {
+            BlockVoiceCheck.IsChecked = false;
+            _settings.SoundpadBlockVoice = false;
+        }
+        _settings.Save();
+        UpdateMicRouter();
+        RebuildHotkeys();
+    }
+
+    private void SoundSearch_TextChanged(object sender, TextChangedEventArgs e) => RefreshSoundButtons();
+
+    private void SoundpadEditor_Click(object sender, RoutedEventArgs e)
+    {
+        var first = _soundList.FirstOrDefault();
+        if (first is null)
+        {
+            AppendLog("[编辑器] 音效库为空，无可编辑文件");
+            return;
+        }
+        OpenEditor(first);
+    }
+
+    private void OpenEditor(SoundItem sound)
+    {
+        try
+        {
+            var win = new SoundEditorWindow(sound);
+            win.Owner = this;
+            win.Show();
+        }
+        catch (Exception ex)
+        {
+            AppendLog($"[编辑器] 打开失败: {ex.Message}");
+        }
+    }
+
+    /// <summary>根据当前模式与设置刷新混音路由（Block voice = 不转发麦克风；混入人声 = 转发）。</summary>
+    private void UpdateMicRouter()
+    {
+        bool micNeeded = SoundpadModeBox.SelectedIndex != 0;
+        if (_settings.SoundpadMixMic && micNeeded)
+        {
+            string? micId = SoundPadService.ResolveMicDeviceId(
+                DeviceNaming.Bare(SoundpadMicDeviceBox.SelectedItem as string ?? _settings.SoundpadMicDevice));
+            _soundpad.SetMicMix(micId is not null, micId);
+            ShowMicHint(micId is null);
+        }
+        else
+        {
+            _soundpad.SetMicMix(false, null);
+        }
+    }
+
+    /// <summary>重新注册全部热键；透传开启时用低层键盘钩子替代 RegisterHotKey（不吞键）。</summary>
+    private void RebuildHotkeys()
+    {
+        if (App.Hotkeys is null)
+        {
+            return;
+        }
+        var (ok, failed) = App.Hotkeys.RegisterAll(_settings, _settings.SoundpadPassthrough);
+
+        _kbdHook?.Dispose();
+        _kbdHook = null;
+        if (_settings.SoundpadPassthrough)
+        {
+            var combos = new List<(uint Mods, uint Vk, int Id)>();
+            void Add(string? g, int id)
+            {
+                if (HotkeyManager.TryParse(g ?? "", out uint m, out uint v))
+                {
+                    combos.Add((m, v, id));
+                }
+            }
+            Add(_settings.SoundpadHkStopAll, HotkeyManager.IdSpStopAll);
+            Add(_settings.SoundpadHkPause, HotkeyManager.IdSpPause);
+            Add(_settings.SoundpadHkRandom, HotkeyManager.IdSpRandom);
+            Add(_settings.SoundpadHkPrevious, HotkeyManager.IdSpPrevious);
+            Add(_settings.SoundpadHkVolumeUp, HotkeyManager.IdSpVolumeUp);
+            Add(_settings.SoundpadHkVolumeDown, HotkeyManager.IdSpVolumeDown);
+            Add(_settings.SoundpadHkMode, HotkeyManager.IdSpMode);
+            int i = 0;
+            foreach (var (name, g) in _settings.SoundpadHotkeys)
+            {
+                if (i >= HotkeyManager.SoundpadHotkeyMax - HotkeyManager.SoundpadHotkeyBase)
+                {
+                    break;
+                }
+                Add(g, HotkeyManager.SoundpadHotkeyBase + i);
+                i++;
+            }
+            if (_settings.SoundpadIndexHotkeys)
+            {
+                for (int n = 1; n <= HotkeyManager.IndexHotkeyCount; n++)
+                {
+                    combos.Add(((uint)0x0001, (uint)('0' + n), HotkeyManager.IndexHotkeyBaseAlt + n));               // Alt
+                    combos.Add(((uint)(0x0001 | 0x0002), (uint)('0' + n), HotkeyManager.IndexHotkeyBaseCtrlAlt + n));  // Ctrl+Alt
+                }
+            }
+            _kbdHook = new KeyboardHook(DispatchHotkey);
+            _kbdHook.SetCombos(combos);
+        }
+
+        string msg = $"[热键] 已刷新（透传={_settings.SoundpadPassthrough}），注册 {ok} 个";
+        if (failed.Count > 0)
+        {
+            msg += "，失败：" + string.Join("、", failed);
+        }
+        AppendLog(msg);
+    }
+
+    private void ApplySoundpadHotkeys_Click(object sender, RoutedEventArgs e)
+    {
+        if (_loadingSettings)
+        {
+            return;
+        }
+        _settings.SoundpadHkStopAll = SpHkStopAllBox.Text.Trim();
+        _settings.SoundpadHkPause = SpHkPauseBox.Text.Trim();
+        _settings.SoundpadHkRandom = SpHkRandomBox.Text.Trim();
+        _settings.SoundpadHkPrevious = SpHkPreviousBox.Text.Trim();
+        _settings.SoundpadHkVolumeUp = SpHkVolumeUpBox.Text.Trim();
+        _settings.SoundpadHkVolumeDown = SpHkVolumeDownBox.Text.Trim();
+        _settings.SoundpadHkMode = SpHkModeBox.Text.Trim();
+        _settings.Save();
+        RebuildHotkeys();
+    }
+
+    private void SoundpadIndexHotkeys_Changed(object sender, RoutedEventArgs e)
+    {
+        if (_loadingSettings)
+        {
+            return;
+        }
+        _settings.SoundpadIndexHotkeys = IndexHotkeysCheck.IsChecked == true;
+        _settings.Save();
+        RebuildHotkeys();
     }
 
     private void MenuMinimizeToTray_Click(object sender, RoutedEventArgs e) => Hide();
@@ -1195,7 +1544,23 @@ public partial class MainWindow : Window
             RefreshMicDevices();
             SoundpadVolumeSlider.Value = _settings.SoundpadVolume;
             SoundpadVolumeText.Text = $"{(int)(_settings.SoundpadVolume * 100)}%";
+
+            // 音板高级开关与特殊热键（构造时一次性载入；_loadingSettings 防回写）
+            NormalizeCheck.IsChecked = _settings.SoundpadNormalize;
+            BlockVoiceCheck.IsChecked = _settings.SoundpadBlockVoice;
+            MixMicCheck.IsChecked = _settings.SoundpadMixMic;
+            PassthroughCheck.IsChecked = _settings.SoundpadPassthrough;
+            IndexHotkeysCheck.IsChecked = _settings.SoundpadIndexHotkeys;
+            SpHkStopAllBox.Text = _settings.SoundpadHkStopAll;
+            SpHkPauseBox.Text = _settings.SoundpadHkPause;
+            SpHkRandomBox.Text = _settings.SoundpadHkRandom;
+            SpHkPreviousBox.Text = _settings.SoundpadHkPrevious;
+            SpHkVolumeUpBox.Text = _settings.SoundpadHkVolumeUp;
+            SpHkVolumeDownBox.Text = _settings.SoundpadHkVolumeDown;
+            SpHkModeBox.Text = _settings.SoundpadHkMode;
+
             UpdateMicHint();
+            UpdateMicRouter();
         }
         finally
         {
