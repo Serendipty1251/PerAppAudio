@@ -22,6 +22,7 @@ internal sealed class MicRouter : IDisposable
     private static readonly Guid KsdSubtypeIeeeFloat = new("00000003-0000-0010-8000-00AA00389B71");
 
     private readonly string _deviceId;
+    private string _sourceDeviceId = string.Empty;
     private WasapiRenderer? _renderer;
     private IAudioClient? _captureClient;
     private IAudioCaptureClient? _capture;
@@ -49,6 +50,21 @@ internal sealed class MicRouter : IDisposable
 
     public string DeviceId => _deviceId;
 
+    /// <summary>系统默认录音设备是否仍是启动时捕获的那个（插拔耳机/切换默认麦克风后需重启路由）。</summary>
+    public bool IsSourceDeviceCurrent()
+    {
+        try
+        {
+            string? current = DeviceManager.GetDefaultEndpointId(EDataFlow.Capture, ERole.Console);
+            return string.IsNullOrEmpty(current)
+                || string.Equals(current, _sourceDeviceId, StringComparison.OrdinalIgnoreCase);
+        }
+        catch
+        {
+            return true; // 查询失败按未变化处理，避免无谓重启
+        }
+    }
+
     /// <summary>启动捕获与渲染。返回 false = 启动失败（已自行清理，调用方不应保留该实例）。</summary>
     public bool Start()
     {
@@ -63,6 +79,7 @@ internal sealed class MicRouter : IDisposable
             // 取默认捕获端点（麦克风），激活 IAudioClient
             var enumerator = DeviceManager.CreateEnumerator();
             var micDevice = enumerator.GetDefaultAudioEndpoint(EDataFlow.Capture, ERole.Console);
+            _sourceDeviceId = micDevice.GetId();
             _captureClient = DeviceManager.ActivateAudioClient(micDevice);
 
             // 请求设备 Mix 格式做共享模式捕获（最简单、最稳）

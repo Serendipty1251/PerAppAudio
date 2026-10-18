@@ -133,6 +133,20 @@ public static class DeviceManager
         }
     }
 
+    /// <summary>取指定流向/角色的默认端点 ID（Capture 用于跟随默认麦克风）；null = 取不到。</summary>
+    public static string? GetDefaultEndpointId(EDataFlow flow, ERole role = ERole.Console)
+    {
+        try
+        {
+            var enumerator = CreateEnumerator();
+            return TryGetDefaultId(enumerator, role, flow);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
     public static IMMDevice GetDevice(string deviceId)
     {
         return CreateEnumerator().GetDevice(deviceId);

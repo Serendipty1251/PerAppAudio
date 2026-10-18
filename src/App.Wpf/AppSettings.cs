@@ -64,6 +64,9 @@ public sealed class AppSettings
     /// <summary>索引热键：Alt+数字 / Ctrl+Alt+数字 播放当前列表第 N 个音效。</summary>
     public bool SoundpadIndexHotkeys { get; set; } = true;
 
+    /// <summary>Numpad 索引热键：小键盘 1–9 播放第 N 个音效（默认关闭，避免占用游戏小键盘）。</summary>
+    public bool SoundpadNumpadIndex { get; set; }
+
     /// <summary>编辑器中最近打开的音效 key（用于快捷重开）。</summary>
     public string? SoundpadEditorLast { get; set; }
 

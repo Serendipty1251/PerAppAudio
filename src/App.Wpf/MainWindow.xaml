@@ -349,9 +349,15 @@
                         <Button Content="{loc:Loc SpOpenEditor}" Style="{StaticResource GhostButton}" Click="SoundpadEditor_Click"/>
                     </StackPanel>
 
-                    <TextBlock x:Name="SoundpadMicHint" DockPanel.Dock="Top" Text="{loc:Loc SpMicHint}"
-                               Foreground="#B45309" FontSize="11" Margin="0,0,0,6" TextWrapping="Wrap"
-                               Visibility="Collapsed"/>
+                    <StackPanel x:Name="SoundpadMicHintPanel" DockPanel.Dock="Top" Orientation="Horizontal"
+                                Margin="0,0,0,6" Visibility="Collapsed">
+                        <TextBlock x:Name="SoundpadMicHint" Text="{loc:Loc SpMicHint}"
+                                   Foreground="#B45309" FontSize="11" TextWrapping="Wrap"
+                                   MaxWidth="600" VerticalAlignment="Center"/>
+                        <Button Content="{loc:Loc BtnOpenSoundSettings}" Style="{StaticResource GhostButton}"
+                                Margin="8,0,0,0" Padding="10,4,10,4" FontSize="11"
+                                Click="OpenSoundSettings_Click"/>
+                    </StackPanel>
 
                     <TextBlock DockPanel.Dock="Top" Text="{loc:Loc SpHint}"
                                Foreground="{StaticResource MutedBrush}" FontSize="11" Margin="0,0,0,8" TextWrapping="Wrap"/>
@@ -468,6 +474,8 @@
                         </Grid>
                         <CheckBox x:Name="IndexHotkeysCheck" Content="{loc:Loc SpIndexHotkeys}" Margin="0,8,0,0"
                                   Checked="SoundpadIndexHotkeys_Changed" Unchecked="SoundpadIndexHotkeys_Changed"/>
+                        <CheckBox x:Name="NumpadIndexCheck" Content="{loc:Loc SpNumpadIndex}" Margin="0,6,0,0"
+                                  Checked="SoundpadNumpadIndex_Changed" Unchecked="SoundpadNumpadIndex_Changed"/>
                         <Button Content="{loc:Loc BtnApplySoundpadHotkeys}" Style="{StaticResource PrimaryButton}" HorizontalAlignment="Left"
                                 Margin="10,10,0,0" Click="ApplySoundpadHotkeys_Click"/>
 

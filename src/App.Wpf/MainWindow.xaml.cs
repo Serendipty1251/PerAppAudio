@@ -29,6 +29,7 @@ public partial class MainWindow : Window
     private List<SoundItem> _soundList = new();
     private readonly List<string> _recentlyPlayed = new();
     private KeyboardHook? _kbdHook;
+    private readonly Random _rng = new();
     private RouteRow? _volumePendingRow;
     private readonly ObservableCollection<RouteRow> _rows = new();
     private readonly ObservableCollection<SessionRow> _sessions = new();
@@ -88,7 +89,7 @@ public partial class MainWindow : Window
         Closing += Window_Closing;
 
         // 音板播放状态变化（播放线程触发 → marshalling 回 UI 线程刷新按钮高亮）
-        _soundpad.StateChanged += () => Dispatcher.BeginInvoke(DispatcherPriority.Background, RefreshSoundButtons);
+        _soundpad.StateChanged += () => Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(() => RefreshSoundButtons(rescan: false)));
 
         // 切到音板页时重扫（用户可能刚往文件夹放了新文件）
         MainTabs.SelectionChanged += (_, _) =>
@@ -226,6 +227,13 @@ public partial class MainWindow : Window
     {
         _host.Store.Load();
         SyncDevices();
+
+        // 设备事件/定时刷新时顺带检查：默认麦克风变了就重启混音捕获（用户态「跟随默认麦克风」）
+        if (!_loadingSettings && !_settings.SoundpadBlockVoice
+            && _settings.SoundpadMode != 0 && _soundpad.MicMixSourceChanged())
+        {
+            UpdateMicRouter();
+        }
 
         var (probeA, probeB2) = _host.Probes;
         ProbeText.Text = string.Format(L10n.Get("ProbeFormat"),
@@ -752,8 +760,7 @@ public partial class MainWindow : Window
         {
             return;
         }
-        var rnd = new Random();
-        PlaySound(_soundList[rnd.Next(_soundList.Count)]);
+        PlaySound(_soundList[_rng.Next(_soundList.Count)]);
     }
 
     private void PlayPrevious()
@@ -932,7 +939,7 @@ public partial class MainWindow : Window
 
     private void ShowMicHint(bool show)
     {
-        SoundpadMicHint.Visibility = show ? Visibility.Visible : Visibility.Collapsed;
+        SoundpadMicHintPanel.Visibility = show ? Visibility.Visible : Visibility.Collapsed;
     }
 
     private void UpdateMicHint()
@@ -943,10 +950,14 @@ public partial class MainWindow : Window
     }
 
     /// <summary>重建音板按钮网格（含分类/搜索过滤、右键菜单：热键 / 循环 / 钉置顶 / 编辑）。</summary>
-    private void RefreshSoundButtons()
+    /// <param name="rescan">false = 复用已扫描列表（搜索输入 / 播放状态刷新时避免每次重扫磁盘）。</param>
+    private void RefreshSoundButtons(bool rescan = true)
     {
-        _soundList = _soundpad.Rescan().ToList();
-        RefreshHotbar();
+        if (rescan || _soundList.Count == 0)
+        {
+            _soundList = _soundpad.Rescan().ToList();
+        }
+        RefreshHotbar(_soundList);
 
         SoundButtons.Children.Clear();
         string q = (SoundSearchBox?.Text ?? string.Empty).Trim();
@@ -1005,17 +1016,18 @@ public partial class MainWindow : Window
         SoundpadEmptyHint.Visibility = _soundList.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
     }
 
-    /// <summary>重建置顶收藏栏。</summary>
-    private void RefreshHotbar()
+    /// <summary>重建置顶收藏栏。<paramref name="all"/> 为空时自行扫描一次（不再逐项重扫）。</summary>
+    private void RefreshHotbar(IReadOnlyList<SoundItem>? all = null)
     {
         if (HotbarPanel is null)
         {
             return;
         }
         HotbarPanel.Children.Clear();
+        var source = all ?? _soundpad.Rescan();
         foreach (var key in _settings.SoundpadHotbar.ToList())
         {
-            var sound = _soundpad.Rescan().FirstOrDefault(s => string.Equals(s.Key, key, StringComparison.OrdinalIgnoreCase));
+            var sound = source.FirstOrDefault(s => string.Equals(s.Key, key, StringComparison.OrdinalIgnoreCase));
             if (sound is null)
             {
                 _settings.SoundpadHotbar.Remove(key);
@@ -1065,8 +1077,7 @@ public partial class MainWindow : Window
             AppendLog($"[音板] 已置顶 {sound.DisplayName}");
         }
         _settings.Save();
-        RefreshHotbar();
-        RefreshSoundButtons();
+        RefreshSoundButtons(); // 内部已含 RefreshHotbar
     }
 
     private void SoundButton_Click(object sender, RoutedEventArgs e)
@@ -1273,7 +1284,7 @@ public partial class MainWindow : Window
         }
     }
 
-    private void SoundSearch_TextChanged(object sender, TextChangedEventArgs e) => RefreshSoundButtons();
+    private void SoundSearch_TextChanged(object sender, TextChangedEventArgs e) => RefreshSoundButtons(rescan: false);
 
     private void SoundpadEditor_Click(object sender, RoutedEventArgs e)
     {
@@ -1308,7 +1319,9 @@ public partial class MainWindow : Window
         {
             string? micId = SoundPadService.ResolveMicDeviceId(
                 DeviceNaming.Bare(SoundpadMicDeviceBox.SelectedItem as string ?? _settings.SoundpadMicDevice));
-            _soundpad.SetMicMix(micId is not null, micId);
+            // 系统默认录音设备变了（插拔耳机等）→ 强制重启捕获，跟随新的默认麦克风
+            bool sourceChanged = _soundpad.MicMixSourceChanged();
+            _soundpad.SetMicMix(micId is not null, micId, forceRestart: sourceChanged);
             ShowMicHint(micId is null);
         }
         else
@@ -1367,8 +1380,19 @@ public partial class MainWindow : Window
                     combos.Add(((uint)(0x0001 | 0x0002), (uint)('0' + n), HotkeyManager.IndexHotkeyBaseCtrlAlt + n));  // Ctrl+Alt
                 }
             }
+            if (_settings.SoundpadNumpadIndex)
+            {
+                for (int n = 1; n <= HotkeyManager.IndexHotkeyCount; n++)
+                {
+                    combos.Add((0u, (uint)(0x60 + n), HotkeyManager.NumpadIndexBase + n)); // 真实小键盘 1-9
+                }
+            }
             _kbdHook = new KeyboardHook(DispatchHotkey);
             _kbdHook.SetCombos(combos);
+            if (!_kbdHook.Installed)
+            {
+                AppendLog("[热键] ⚠ 低层键盘钩子安装失败：透传热键不可用（可能被安全软件拦截）");
+            }
         }
 
         string msg = $"[热键] 已刷新（透传={_settings.SoundpadPassthrough}），注册 {ok} 个";
@@ -1405,6 +1429,33 @@ public partial class MainWindow : Window
         _settings.SoundpadIndexHotkeys = IndexHotkeysCheck.IsChecked == true;
         _settings.Save();
         RebuildHotkeys();
+    }
+
+    private void SoundpadNumpadIndex_Changed(object sender, RoutedEventArgs e)
+    {
+        if (_loadingSettings)
+        {
+            return;
+        }
+        _settings.SoundpadNumpadIndex = NumpadIndexCheck.IsChecked == true;
+        _settings.Save();
+        RebuildHotkeys();
+    }
+
+    /// <summary>打开系统声音设置——虚拟麦克风需在系统里设为默认录音设备（用户态无法程序化切换默认输入）。</summary>
+    private void OpenSoundSettings_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("ms-settings:sound")
+            {
+                UseShellExecute = true,
+            });
+        }
+        catch (Exception ex)
+        {
+            AppendLog($"[音板] 打开系统声音设置失败: {ex.Message}");
+        }
     }
 
     private void MenuMinimizeToTray_Click(object sender, RoutedEventArgs e) => Hide();
@@ -1572,6 +1623,7 @@ public partial class MainWindow : Window
             MixMicCheck.IsChecked = _settings.SoundpadMixMic;
             PassthroughCheck.IsChecked = _settings.SoundpadPassthrough;
             IndexHotkeysCheck.IsChecked = _settings.SoundpadIndexHotkeys;
+            NumpadIndexCheck.IsChecked = _settings.SoundpadNumpadIndex;
             SpHkStopAllBox.Text = _settings.SoundpadHkStopAll;
             SpHkPauseBox.Text = _settings.SoundpadHkPause;
             SpHkRandomBox.Text = _settings.SoundpadHkRandom;

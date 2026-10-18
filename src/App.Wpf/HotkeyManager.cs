@@ -52,6 +52,9 @@ public sealed class HotkeyManager
     public const int IndexHotkeyBaseCtrlAlt = 300;
     public const int IndexHotkeyCount = 9;
 
+    /// <summary>Numpad 索引热键：Numpad1..9 = 400+N（真实小键盘 VK 0x61-0x69）。</summary>
+    public const int NumpadIndexBase = 400;
+
     private readonly Window _window;
     private readonly Action<int> _dispatch;
     private HwndSource? _source;
@@ -180,6 +183,14 @@ public sealed class HotkeyManager
             }
         }
 
+        if (!passthrough && settings.SoundpadNumpadIndex)
+        {
+            for (int n = 1; n <= IndexHotkeyCount; n++)
+            {
+                ok += TryRegister(hwnd, NumpadIndexBase + n, $"小键盘{n}", $"NumPad{n}", failed) ? 1 : 0;
+            }
+        }
+
         return (ok + index, failed);
     }
 
@@ -204,6 +215,11 @@ public sealed class HotkeyManager
         if (id >= IndexHotkeyBaseCtrlAlt && id < IndexHotkeyBaseCtrlAlt + IndexHotkeyCount)
         {
             n = id - IndexHotkeyBaseCtrlAlt;
+            return true;
+        }
+        if (id >= NumpadIndexBase && id < NumpadIndexBase + IndexHotkeyCount)
+        {
+            n = id - NumpadIndexBase;
             return true;
         }
         n = 0;
@@ -242,6 +258,7 @@ public sealed class HotkeyManager
         {
             UnregisterHotKey(hwnd, IndexHotkeyBaseAlt + n);
             UnregisterHotKey(hwnd, IndexHotkeyBaseCtrlAlt + n);
+            UnregisterHotKey(hwnd, NumpadIndexBase + n);
         }
         _soundpadNames.Clear();
     }
@@ -312,6 +329,9 @@ public sealed class HotkeyManager
             "SUBTRACT" => 0x6D,
             _ when k.Length == 1 && k[0] is >= 'A' and <= 'Z' => k[0],
             _ when k.Length == 1 && k[0] is >= '0' and <= '9' => k[0],
+            // 真实小键盘：NumPad0..9 → VK_NUMPAD0..9 (0x60-0x69)
+            _ when k.Length == 7 && k.StartsWith("NUMPAD", StringComparison.Ordinal) && k[6] is >= '0' and <= '9'
+                => (uint)(0x60 + (k[6] - '0')),
             _ when k.Length == 2 && k[0] == 'F' && k[1] is >= '1' and <= '9' => (uint)(0x70 + (k[1] - '1')),
             _ when k.Length == 3 && k[0] == 'F' && k[1] == '1' && k[2] is >= '0' and <= '2' => (uint)(0x70 + 9 + (k[2] - '0')),
             _ => 0,

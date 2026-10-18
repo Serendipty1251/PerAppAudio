@@ -24,6 +24,7 @@ public partial class SoundEditorWindow : Window
     private float[] _envMax = Array.Empty<float>();
     private int _envBuckets;
     private WaveOutEvent? _preview;
+    private AudioFileReader? _previewReader;
 
     public SoundEditorWindow(SoundItem sound)
     {
@@ -219,9 +220,10 @@ public partial class SoundEditorWindow : Window
         }
     }
 
-    private bool TryCreateTrimmed(out ISampleProvider? provider)
+    private bool TryCreateTrimmed(out ISampleProvider? provider, out AudioFileReader? reader)
     {
         provider = null;
+        reader = null;
         if (_totalSamples <= 0)
         {
             return false;
@@ -233,18 +235,22 @@ public partial class SoundEditorWindow : Window
         {
             return false;
         }
+
+        AudioFileReader? audio = null;
         try
         {
-            var reader = new AudioFileReader(_path);
-            provider = new OffsetSampleProvider(reader)
+            audio = new AudioFileReader(_path);
+            provider = new OffsetSampleProvider(audio)
             {
                 SkipOver = TimeSpan.FromSeconds((double)start / _sampleRate),
                 Take = TimeSpan.FromSeconds((double)len / _sampleRate),
             };
+            reader = audio; // 生命周期交给调用方（StopPreview 释放）
             return true;
         }
         catch
         {
+            audio?.Dispose();
             return false;
         }
     }
@@ -252,11 +258,12 @@ public partial class SoundEditorWindow : Window
     private void PreviewBtn_Click(object sender, RoutedEventArgs e)
     {
         StopPreview();
-        if (!TryCreateTrimmed(out var provider) || provider is null)
+        if (!TryCreateTrimmed(out var provider, out var reader) || provider is null)
         {
             StatusText.Text = L10n.Get("SpEditorFail");
             return;
         }
+        _previewReader = reader;
         try
         {
             _preview = new WaveOutEvent();
@@ -267,6 +274,7 @@ public partial class SoundEditorWindow : Window
         }
         catch (Exception ex)
         {
+            StopPreview();
             StatusText.Text = $"{L10n.Get("SpEditorFail")}: {ex.Message}";
         }
     }
@@ -288,6 +296,9 @@ public partial class SoundEditorWindow : Window
             }
             _preview = null;
         }
+        // 释放试听用的解码器（每次试听都会新建 AudioFileReader，不释放会累积文件句柄）
+        _previewReader?.Dispose();
+        _previewReader = null;
         StopPreviewBtn.IsEnabled = false;
     }
 

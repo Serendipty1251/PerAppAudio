@@ -302,7 +302,7 @@ public sealed class SoundPadService : IDisposable
     /// 设置麦克风混音路由：enabled=true 时捕获真实默认麦克风并渲染到虚拟麦克风设备（与音效渲染会话
     /// 由音频引擎自动混合）；enabled=false（Block voice 默认）则停止转发，虚拟麦克风只收到音效。
     /// </summary>
-    public void SetMicMix(bool enabled, string? micDeviceId)
+    public void SetMicMix(bool enabled, string? micDeviceId, bool forceRestart = false)
     {
         MicRouter? stop = null;
         MicRouter? start = null;
@@ -311,7 +311,7 @@ public sealed class SoundPadService : IDisposable
             bool want = enabled && !string.IsNullOrEmpty(micDeviceId);
             if (want)
             {
-                if (_micRouter is null || _micRouter.DeviceId != micDeviceId)
+                if (_micRouter is null || _micRouter.DeviceId != micDeviceId || forceRestart)
                 {
                     stop = _micRouter;
                     start = new MicRouter(micDeviceId!);
@@ -342,8 +342,18 @@ public sealed class SoundPadService : IDisposable
         }
     }
 
-    // ---------- 音量归一化 ----------
+    /// <summary>混音路由的采集源（系统默认麦克风）是否已变化；true = 需要重启路由才能跟随。</summary>
+    public bool MicMixSourceChanged()
+    {
+        MicRouter? router;
+        lock (_gate)
+        {
+            router = _micRouter;
+        }
+        return router is not null && !router.IsSourceDeviceCurrent();
+    }
 
+    // ---------- 音量归一化 ----------
     /// <summary>取该音效的归一化增益（已缓存则直接返回；否则扫描峰值计算）。</summary>
     public float GetGain(SoundItem item)
     {
