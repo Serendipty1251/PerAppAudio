@@ -8,8 +8,6 @@ namespace PerAppAudio.App.Wpf;
 /// <summary>
 /// 全局热键管理器：RegisterHotKey + 主窗口 WndProc 钩子。
 /// 只负责「注册/解析/分发」，具体动作由 MainWindow 注入（复用路由与音量能力）。
-/// 同时支持：全局应用热键(1-6)、音板每音效动态热键(100+)、音板特殊热键(20-26)、
-/// 索引热键(Alt+数字 200+ / Ctrl+Alt+数字 300+ 播放第 N 个音效)。
 /// </summary>
 public sealed class HotkeyManager
 {
@@ -33,27 +31,6 @@ public sealed class HotkeyManager
     public const int IdMute = 4;
     public const int IdShowWindow = 5;
     public const int IdShowFlyout = 6;
-
-    // 音板特殊热键
-    public const int IdSpStopAll = 20;
-    public const int IdSpPause = 21;
-    public const int IdSpRandom = 22;
-    public const int IdSpPrevious = 23;
-    public const int IdSpVolumeUp = 24;
-    public const int IdSpVolumeDown = 25;
-    public const int IdSpMode = 26;
-
-    /// <summary>音板每音效热键 ID 起点（100+i）。</summary>
-    public const int SoundpadHotkeyBase = 100;
-    public const int SoundpadHotkeyMax = 200;
-
-    /// <summary>索引热键：Alt+数字 = 200+N；Ctrl+Alt+数字 = 300+N（N=1..9，对应数字键 VK 0x31-0x39）。</summary>
-    public const int IndexHotkeyBaseAlt = 200;
-    public const int IndexHotkeyBaseCtrlAlt = 300;
-    public const int IndexHotkeyCount = 9;
-
-    /// <summary>Numpad 索引热键：Numpad1..9 = 400+N（真实小键盘 VK 0x61-0x69）。</summary>
-    public const int NumpadIndexBase = 400;
 
     private readonly Window _window;
     private readonly Action<int> _dispatch;
@@ -112,8 +89,8 @@ public sealed class HotkeyManager
         }
     }
 
-    /// <summary>注册全部热键。返回 (成功数, 失败列表)。passthrough=true 时不注册音板/特殊热键（改由低层钩子透传）。</summary>
-    public (int Ok, List<string> Failed) RegisterAll(AppSettings settings, bool passthrough = false)
+    /// <summary>注册全部全局热键。返回 (成功数, 失败列表)。</summary>
+    public (int Ok, List<string> Failed) RegisterAll(AppSettings settings)
     {
         var failed = new List<string>();
         EnsureHook();
@@ -121,7 +98,7 @@ public sealed class HotkeyManager
         {
             _window.Loaded -= OnWindowLoadedRetry;
             _window.Loaded += OnWindowLoadedRetry;
-            _pendingSettings = (settings, passthrough);
+            _pendingSettings = settings;
             return (0, failed);
         }
 
@@ -141,92 +118,10 @@ public sealed class HotkeyManager
         ok += TryRegister(hwnd, IdShowWindow, "显示窗口", settings.HotkeyShowWindow, failed) ? 1 : 0;
         ok += TryRegister(hwnd, IdShowFlyout, "托盘面板", settings.HotkeyShowFlyout, failed) ? 1 : 0;
 
-        if (!passthrough)
-        {
-            ok += TryRegister(hwnd, IdSpStopAll, "停止全部", settings.SoundpadHkStopAll, failed) ? 1 : 0;
-            ok += TryRegister(hwnd, IdSpPause, "暂停/恢复", settings.SoundpadHkPause, failed) ? 1 : 0;
-            ok += TryRegister(hwnd, IdSpRandom, "随机播放", settings.SoundpadHkRandom, failed) ? 1 : 0;
-            ok += TryRegister(hwnd, IdSpPrevious, "上一个", settings.SoundpadHkPrevious, failed) ? 1 : 0;
-            ok += TryRegister(hwnd, IdSpVolumeUp, "音板音量+", settings.SoundpadHkVolumeUp, failed) ? 1 : 0;
-            ok += TryRegister(hwnd, IdSpVolumeDown, "音板音量-", settings.SoundpadHkVolumeDown, failed) ? 1 : 0;
-            ok += TryRegister(hwnd, IdSpMode, "切换模式", settings.SoundpadHkMode, failed) ? 1 : 0;
-        }
-
-        _soundpadNames.Clear();
-        int index = 0;
-        foreach (var (name, gesture) in settings.SoundpadHotkeys)
-        {
-            if (string.IsNullOrWhiteSpace(gesture))
-            {
-                continue;
-            }
-            if (index + SoundpadHotkeyBase >= SoundpadHotkeyMax)
-            {
-                failed.Add($"{name}(超出热键数量上限)");
-                break;
-            }
-            int id = SoundpadHotkeyBase + index;
-            _soundpadNames[id] = name;
-            if (!passthrough)
-            {
-                TryRegister(hwnd, id, $"音板:{name}", gesture, failed);
-            }
-            index++;
-        }
-
-        if (!passthrough && settings.SoundpadIndexHotkeys)
-        {
-            for (int n = 1; n <= IndexHotkeyCount; n++)
-            {
-                TryRegister(hwnd, IndexHotkeyBaseAlt + n, $"第{n}个", $"Alt+{n}", failed);
-                TryRegister(hwnd, IndexHotkeyBaseCtrlAlt + n, $"第{n}个", $"Ctrl+Alt+{n}", failed);
-            }
-        }
-
-        if (!passthrough && settings.SoundpadNumpadIndex)
-        {
-            for (int n = 1; n <= IndexHotkeyCount; n++)
-            {
-                ok += TryRegister(hwnd, NumpadIndexBase + n, $"小键盘{n}", $"NumPad{n}", failed) ? 1 : 0;
-            }
-        }
-
-        return (ok + index, failed);
+        return (ok, failed);
     }
 
-    private readonly Dictionary<int, string> _soundpadNames = new();
-
-    public string? GetSoundpadName(int id)
-        => id >= SoundpadHotkeyBase && id < SoundpadHotkeyMax && _soundpadNames.TryGetValue(id, out var name)
-            ? name
-            : null;
-
-    public bool IsSoundpadHotkey(int id) => id >= SoundpadHotkeyBase && id < SoundpadHotkeyMax;
-
-    public bool IsSpecialHotkey(int id) => id is >= 20 and <= 26;
-
-    public bool IsIndexHotkey(int id, out int n)
-    {
-        if (id >= IndexHotkeyBaseAlt && id < IndexHotkeyBaseAlt + IndexHotkeyCount)
-        {
-            n = id - IndexHotkeyBaseAlt;
-            return true;
-        }
-        if (id >= IndexHotkeyBaseCtrlAlt && id < IndexHotkeyBaseCtrlAlt + IndexHotkeyCount)
-        {
-            n = id - IndexHotkeyBaseCtrlAlt;
-            return true;
-        }
-        if (id >= NumpadIndexBase && id < NumpadIndexBase + IndexHotkeyCount)
-        {
-            n = id - NumpadIndexBase;
-            return true;
-        }
-        n = 0;
-        return false;
-    }
-
-    private (AppSettings, bool)? _pendingSettings;
+    private AppSettings? _pendingSettings;
 
     private void OnWindowLoadedRetry(object sender, RoutedEventArgs e)
     {
@@ -234,7 +129,7 @@ public sealed class HotkeyManager
         if (_pendingSettings is { } pending)
         {
             _pendingSettings = null;
-            RegisterAll(pending.Item1, pending.Item2);
+            RegisterAll(pending);
         }
     }
 
@@ -245,22 +140,10 @@ public sealed class HotkeyManager
         {
             return;
         }
-        foreach (int id in new[] { IdNextOutput, IdVolumeUp, IdVolumeDown, IdMute, IdShowWindow, IdShowFlyout,
-            IdSpStopAll, IdSpPause, IdSpRandom, IdSpPrevious, IdSpVolumeUp, IdSpVolumeDown, IdSpMode })
+        foreach (int id in new[] { IdNextOutput, IdVolumeUp, IdVolumeDown, IdMute, IdShowWindow, IdShowFlyout })
         {
             UnregisterHotKey(hwnd, id);
         }
-        foreach (int id in _soundpadNames.Keys.ToList())
-        {
-            UnregisterHotKey(hwnd, id);
-        }
-        for (int n = 1; n <= IndexHotkeyCount; n++)
-        {
-            UnregisterHotKey(hwnd, IndexHotkeyBaseAlt + n);
-            UnregisterHotKey(hwnd, IndexHotkeyBaseCtrlAlt + n);
-            UnregisterHotKey(hwnd, NumpadIndexBase + n);
-        }
-        _soundpadNames.Clear();
     }
 
     private bool TryRegister(IntPtr hwnd, int id, string label, string? gesture, List<string> failed)

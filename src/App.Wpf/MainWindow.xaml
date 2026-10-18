@@ -35,7 +35,6 @@
                 <MenuItem Header="{loc:Loc MenuTabRoutes}" Click="MenuTabRoutes_Click"/>
                 <MenuItem Header="{loc:Loc MenuTabLive}" Click="MenuTabLive_Click"/>
                 <MenuItem Header="{loc:Loc MenuTabLog}" Click="MenuTabLog_Click"/>
-                <MenuItem Header="{loc:Loc MenuTabSoundpad}" Click="MenuTabSoundpad_Click"/>
                 <Separator/>
                 <MenuItem Header="{loc:Loc MenuMinimize}" Click="MenuMinimizeToTray_Click"/>
                 <MenuItem Header="{loc:Loc MenuExit}" Click="MenuExit_Click"/>
@@ -288,94 +287,7 @@
                     </ListBox>
                 </DockPanel>
             </TabItem>
-            <!-- Tab 5：音板 -->
-            <TabItem Header="{loc:Loc TabSoundpad}">
-                <DockPanel Margin="8">
-                    <!-- Hotbar 置顶收藏 -->
-                    <Border DockPanel.Dock="Top" BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,0,0,1"
-                            Padding="0,0,0,6" Margin="0,0,0,6">
-                        <StackPanel>
-                            <TextBlock Text="{loc:Loc SpHotbar}" FontSize="11" Foreground="{StaticResource MutedBrush}" Margin="0,0,0,4"/>
-                            <WrapPanel x:Name="HotbarPanel" Orientation="Horizontal"/>
-                        </StackPanel>
-                    </Border>
-
-                    <!-- 工具条 1：播放模式与目标 -->
-                    <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="0,0,0,6">
-                        <TextBlock Text="{loc:Loc SpMode}" VerticalAlignment="Center" Margin="0,0,6,0"
-                                   Foreground="{StaticResource MutedBrush}"/>
-                        <ComboBox x:Name="SoundpadModeBox" Width="110" SelectionChanged="SoundpadMode_Changed">
-                            <ComboBoxItem Content="{loc:Loc SpModeSpeakers}"/>
-                            <ComboBoxItem Content="{loc:Loc SpModeMic}"/>
-                            <ComboBoxItem Content="{loc:Loc SpModeBoth}"/>
-                        </ComboBox>
-                        <TextBlock Text="{loc:Loc SpDevice}" VerticalAlignment="Center" Margin="14,0,6,0"
-                                   Foreground="{StaticResource MutedBrush}"/>
-                        <ComboBox x:Name="SoundpadDeviceBox" Width="200" SelectionChanged="SoundpadDevice_Changed"
-                                  ItemsSource="{Binding Devices, RelativeSource={RelativeSource AncestorType=Window}}"/>
-                        <TextBlock Text="{loc:Loc SpMicDevice}" VerticalAlignment="Center" Margin="14,0,6,0"
-                                   Foreground="{StaticResource MutedBrush}"/>
-                        <ComboBox x:Name="SoundpadMicDeviceBox" Width="200" SelectionChanged="SoundpadMicDevice_Changed"/>
-                    </StackPanel>
-
-                    <!-- 工具条 2：音量 + 操作 + 搜索 -->
-                    <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="0,0,0,6">
-                        <TextBlock Text="{loc:Loc SpVolume}" VerticalAlignment="Center" Margin="0,0,6,0"
-                                   Foreground="{StaticResource MutedBrush}"/>
-                        <Slider x:Name="SoundpadVolumeSlider" Width="120" Minimum="0" Maximum="1"
-                                VerticalAlignment="Center" ValueChanged="SoundpadVolume_ValueChanged"/>
-                        <TextBlock x:Name="SoundpadVolumeText" Width="36" VerticalAlignment="Center"
-                                   Margin="4,0,0,0" FontSize="11"/>
-                        <Button Content="{loc:Loc SpStopAll}" Style="{StaticResource GhostButton}" Margin="16,0,0,0"
-                                Click="SoundpadStopAll_Click"/>
-                        <Button Content="{loc:Loc SpOpenFolder}" Style="{StaticResource GhostButton}" Margin="8,0,0,0"
-                                Click="SoundpadOpenFolder_Click"/>
-                        <TextBlock Text="{loc:Loc SpSearch}" VerticalAlignment="Center" Margin="16,0,6,0"
-                                   Foreground="{StaticResource MutedBrush}"/>
-                        <TextBox x:Name="SoundSearchBox" Width="160" VerticalAlignment="Center"
-                                 TextChanged="SoundSearch_TextChanged"/>
-                        <Button x:Name="SetDefaultMicBtn" Content="{loc:Loc BtnSetDefaultMic}" Style="{StaticResource GhostButton}"
-                                Margin="16,0,0,0" Padding="8,3,8,3" FontSize="11" Click="SetDefaultMic_Click"/>
-                        <Button x:Name="RestoreDefaultMicBtn" Content="{loc:Loc BtnRestoreDefaultMic}" Style="{StaticResource GhostButton}"
-                                Margin="6,0,0,0" Padding="8,3,8,3" FontSize="11" Click="RestoreDefaultMic_Click"
-                                Visibility="Collapsed"/>
-                    </StackPanel>
-
-                    <!-- 工具条 3：高级开关 -->
-                    <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="0,0,0,6" VerticalAlignment="Center">
-                        <CheckBox x:Name="NormalizeCheck" Content="{loc:Loc SpNormalize}" Margin="0,0,12,0"
-                                  Checked="SoundpadOption_Changed" Unchecked="SoundpadOption_Changed"/>
-                        <CheckBox x:Name="BlockVoiceCheck" Content="{loc:Loc SpBlockVoice}" Margin="0,0,12,0"
-                                  Checked="SoundpadOption_Changed" Unchecked="SoundpadOption_Changed"/>
-                        <CheckBox x:Name="MixMicCheck" Content="{loc:Loc SpMixMic}" Margin="0,0,12,0"
-                                  Checked="SoundpadOption_Changed" Unchecked="SoundpadOption_Changed"/>
-                        <CheckBox x:Name="PassthroughCheck" Content="{loc:Loc SpPassthrough}" Margin="0,0,12,0"
-                                  Checked="SoundpadOption_Changed" Unchecked="SoundpadOption_Changed"/>
-                        <Button Content="{loc:Loc SpOpenEditor}" Style="{StaticResource GhostButton}" Click="SoundpadEditor_Click"/>
-                    </StackPanel>
-
-                    <StackPanel x:Name="SoundpadMicHintPanel" DockPanel.Dock="Top" Orientation="Horizontal"
-                                Margin="0,0,0,6" Visibility="Collapsed">
-                        <TextBlock x:Name="SoundpadMicHint" Text="{loc:Loc SpMicHint}"
-                                   Foreground="#B45309" FontSize="11" TextWrapping="Wrap"
-                                   MaxWidth="600" VerticalAlignment="Center"/>
-                        <Button Content="{loc:Loc BtnOpenSoundSettings}" Style="{StaticResource GhostButton}"
-                                Margin="8,0,0,0" Padding="10,4,10,4" FontSize="11"
-                                Click="OpenSoundSettings_Click"/>
-                    </StackPanel>
-
-                    <TextBlock DockPanel.Dock="Top" Text="{loc:Loc SpHint}"
-                               Foreground="{StaticResource MutedBrush}" FontSize="11" Margin="0,0,0,8" TextWrapping="Wrap"/>
-
-                    <TextBlock x:Name="SoundpadEmptyHint" DockPanel.Dock="Top" Text="{loc:Loc SpEmpty}"
-                               Foreground="{StaticResource MutedBrush}" FontSize="12" Margin="4,0,0,8"/>
-
-                    <ScrollViewer VerticalScrollBarVisibility="Auto">
-                        <WrapPanel x:Name="SoundButtons" Orientation="Horizontal"/>
-                    </ScrollViewer>
-                </DockPanel>
-            </TabItem>
-            <!-- Tab 6：设置 -->
+            <!-- Tab 5：设置 -->
             <TabItem Header="{loc:Loc TabSettings}">
                 <ScrollViewer Margin="8" VerticalScrollBarVisibility="Auto">
                     <StackPanel MaxWidth="560" HorizontalAlignment="Left">
@@ -443,46 +355,6 @@
                         </Grid>
                         <Button Content="{loc:Loc BtnApplyHotkeys}" Style="{StaticResource PrimaryButton}" HorizontalAlignment="Left"
                                 Margin="0,10,0,0" Click="ApplyHotkeys_Click"/>
-
-                        <Separator Margin="0,14"/>
-                        <TextBlock Text="{loc:Loc SectionSoundpadHotkeys}" FontSize="14" FontWeight="SemiBold" Margin="0,4,0,8"/>
-                        <TextBlock Text="{loc:Loc HintSoundpadHotkeys}"
-                                   Foreground="{StaticResource MutedBrush}" FontSize="11" Margin="0,0,0,8"/>
-                        <Grid>
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="180"/>
-                                <ColumnDefinition Width="*"/>
-                            </Grid.ColumnDefinitions>
-                            <Grid.RowDefinitions>
-                                <RowDefinition Height="Auto"/>
-                                <RowDefinition Height="Auto"/>
-                                <RowDefinition Height="Auto"/>
-                                <RowDefinition Height="Auto"/>
-                                <RowDefinition Height="Auto"/>
-                                <RowDefinition Height="Auto"/>
-                                <RowDefinition Height="Auto"/>
-                            </Grid.RowDefinitions>
-                            <TextBlock Grid.Row="0" Grid.Column="0" Text="{loc:Loc SpHkStopAll}" VerticalAlignment="Center" Margin="0,4"/>
-                            <TextBox Grid.Row="0" Grid.Column="1" x:Name="SpHkStopAllBox" Margin="0,2"/>
-                            <TextBlock Grid.Row="1" Grid.Column="0" Text="{loc:Loc SpHkPause}" VerticalAlignment="Center" Margin="0,4"/>
-                            <TextBox Grid.Row="1" Grid.Column="1" x:Name="SpHkPauseBox" Margin="0,2"/>
-                            <TextBlock Grid.Row="2" Grid.Column="0" Text="{loc:Loc SpHkRandom}" VerticalAlignment="Center" Margin="0,4"/>
-                            <TextBox Grid.Row="2" Grid.Column="1" x:Name="SpHkRandomBox" Margin="0,2"/>
-                            <TextBlock Grid.Row="3" Grid.Column="0" Text="{loc:Loc SpHkPrevious}" VerticalAlignment="Center" Margin="0,4"/>
-                            <TextBox Grid.Row="3" Grid.Column="1" x:Name="SpHkPreviousBox" Margin="0,2"/>
-                            <TextBlock Grid.Row="4" Grid.Column="0" Text="{loc:Loc SpHkVolumeUp}" VerticalAlignment="Center" Margin="0,4"/>
-                            <TextBox Grid.Row="4" Grid.Column="1" x:Name="SpHkVolumeUpBox" Margin="0,2"/>
-                            <TextBlock Grid.Row="5" Grid.Column="0" Text="{loc:Loc SpHkVolumeDown}" VerticalAlignment="Center" Margin="0,4"/>
-                            <TextBox Grid.Row="5" Grid.Column="1" x:Name="SpHkVolumeDownBox" Margin="0,2"/>
-                            <TextBlock Grid.Row="6" Grid.Column="0" Text="{loc:Loc SpHkMode}" VerticalAlignment="Center" Margin="0,4"/>
-                            <TextBox Grid.Row="6" Grid.Column="1" x:Name="SpHkModeBox" Margin="0,2"/>
-                        </Grid>
-                        <CheckBox x:Name="IndexHotkeysCheck" Content="{loc:Loc SpIndexHotkeys}" Margin="0,8,0,0"
-                                  Checked="SoundpadIndexHotkeys_Changed" Unchecked="SoundpadIndexHotkeys_Changed"/>
-                        <CheckBox x:Name="NumpadIndexCheck" Content="{loc:Loc SpNumpadIndex}" Margin="0,6,0,0"
-                                  Checked="SoundpadNumpadIndex_Changed" Unchecked="SoundpadNumpadIndex_Changed"/>
-                        <Button Content="{loc:Loc BtnApplySoundpadHotkeys}" Style="{StaticResource PrimaryButton}" HorizontalAlignment="Left"
-                                Margin="10,10,0,0" Click="ApplySoundpadHotkeys_Click"/>
 
                         <Separator Margin="0,14"/>
                         <TextBlock Text="{loc:Loc HintConfigPath}"

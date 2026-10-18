@@ -67,7 +67,6 @@ internal static class Program
              mic list                      列出捕获（麦克风）端点
              mic set --pid <PID> --to <ID|名称>   每进程默认麦克风（本机平台暂不支持，如实报错）
              mic get --pid <PID>          读回每进程默认麦克风
-             mic default <ID|名称>        把该捕获端点设为系统默认麦克风（Console/Multimedia/Comms）
 
              ctl add --pid <PID> --to <ID|名称> [--mode auto|a|b] [--volume 0-1]
                                          P1 控制闭环：立即改道 + 写入持久路由表
@@ -479,52 +478,8 @@ internal static class Program
                 return 0;
             }
 
-            case "default":
-            {
-                // 把捕获端点设为「系统默认麦克风」——驱动级接管的用户态落地：
-                // 之后所有按默认设备取音的应用都会收到虚拟麦克风（我们的混音）。
-                string? to = args.Length > 2 ? args[2] : GetOption(args, "--to");
-                if (string.IsNullOrWhiteSpace(to))
-                {
-                    Console.Error.WriteLine("用法：mic default <ID|友好名>");
-                    return 2;
-                }
-                var devices = DeviceManager.EnumerateCaptureDevices();
-                var device = devices.FirstOrDefault(d =>
-                        string.Equals(d.Id, to, StringComparison.OrdinalIgnoreCase)
-                        || string.Equals(d.FriendlyName, to, StringComparison.OrdinalIgnoreCase))
-                    ?? devices.FirstOrDefault(d => d.FriendlyName.Contains(to, StringComparison.OrdinalIgnoreCase))
-                    ?? throw new InvalidOperationException($"找不到捕获设备：{to}");
-
-                string roleArg = (GetOption(args, "--role") ?? "all").ToLowerInvariant();
-                ERole[] roles = roleArg switch
-                {
-                    "console" => new[] { ERole.Console },
-                    "multimedia" => new[] { ERole.Multimedia },
-                    "communications" or "comms" => new[] { ERole.Communications },
-                    _ => new[] { ERole.Console, ERole.Multimedia, ERole.Communications },
-                };
-
-                string? before = PolicyConfig.GetDefaultCaptureId(roles[0]);
-                int hr = 0;
-                foreach (var role in roles)
-                {
-                    hr = PolicyConfig.SetDefaultEndpoint(device.Id, role);
-                    if (hr < 0)
-                    {
-                        break;
-                    }
-                }
-                string? after = PolicyConfig.GetDefaultCaptureId(roles[0]);
-                Console.WriteLine($"[默认麦克风] 目标：{device.FriendlyName}（角色：{roleArg}）");
-                Console.WriteLine($"  设置结果：0x{hr:X8}" + (hr >= 0 ? " ✅" : "（IPolicyConfig 不可用或被系统拦截，请手动设置）"));
-                Console.WriteLine($"  设置前默认：{before ?? "(读不到)"}");
-                Console.WriteLine($"  设置后默认：{after ?? "(读不到)"}");
-                return hr >= 0 ? 0 : 1;
-            }
-
             default:
-                Console.Error.WriteLine($"未知子命令: {sub}（list / set / get / default）");
+                Console.Error.WriteLine($"未知子命令: {sub}（list / set / get）");
                 return 2;
         }
     }
