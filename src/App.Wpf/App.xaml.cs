@@ -68,7 +68,7 @@ public partial class App : System.Windows.Application
         if (_host is null)
         {
             System.Windows.MessageBox.Show(
-                "PerAppAudio 已在运行（单实例）。请查看系统托盘图标。",
+                L10n.Get("MsgAlreadyRunning"),
                 "PerAppAudio",
                 MessageBoxButton.OK,
                 MessageBoxImage.Information);
@@ -93,6 +93,13 @@ public partial class App : System.Windows.Application
                 }
             });
         };
+
+        // 界面语言：建窗口前载入（XAML 的 {loc:Loc} 绑定即时取到当前语言）
+        if (!L10n.Load(Settings.Language))
+        {
+            L10n.Load("zh-CN");
+        }
+        AppendFileLog($"[i18n] 界面语言={L10n.Instance.Culture}（{L10n.Get("TabSettings")}/{L10n.Get("BtnApply")}）");
 
         _window = new MainWindow();
         _window.Show();
@@ -144,23 +151,23 @@ public partial class App : System.Windows.Application
     private void InitTray()
     {
         _trayMenu = new WinForms.ContextMenuStrip();
-        var showItem = new WinForms.ToolStripMenuItem("显示主窗口");
+        var showItem = new WinForms.ToolStripMenuItem(L10n.Get("BtnOpenMain"));
         showItem.Click += (_, _) => ShowMainWindow();
         _trayMenu.Items.Add(showItem);
 
-        var profileItem = new WinForms.ToolStripMenuItem("场景");
+        var profileItem = new WinForms.ToolStripMenuItem(L10n.Get("LabelProfile"));
         _trayMenu.Items.Add(profileItem);
         _trayMenu.Opening += (_, _) => RebuildProfileMenu(profileItem);
 
         _trayMenu.Items.Add(new WinForms.ToolStripSeparator());
-        var exitItem = new WinForms.ToolStripMenuItem("退出");
+        var exitItem = new WinForms.ToolStripMenuItem(L10n.Get("BtnExit"));
         exitItem.Click += (_, _) => ExitApplication();
         _trayMenu.Items.Add(exitItem);
 
         _tray = new WinForms.NotifyIcon
         {
             Icon = LoadAppIcon(),
-            Text = "PerAppAudio 每应用音频路由",
+            Text = L10n.Get("TrayTooltip"),
             Visible = true,
             ContextMenuStrip = _trayMenu,
         };
@@ -225,11 +232,12 @@ public partial class App : System.Windows.Application
             return;
         }
 
-        profileItem.DropDownItems.Add("（rules.yaml 中无场景）").Enabled = false;
+        profileItem.DropDownItems.Add(L10n.Get("HintNoProfiles")).Enabled = false;
         foreach (var profile in _host.Rules.Profiles)
         {
             var name = profile.Name;
-            var item = new WinForms.ToolStripMenuItem($"{name}（{profile.Rules.Count} 规则）");
+            var item = new WinForms.ToolStripMenuItem(
+                string.Format(L10n.Get("ProfileItemFormat"), name, profile.Rules.Count));
             item.Click += async (_, _) =>
             {
                 try

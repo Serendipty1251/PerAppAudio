@@ -31,13 +31,14 @@ public static class SessionActions
 
         if (!hasSession)
         {
-            return new Result($"{appName} 没有音频会话", $"{appName} 没有音频会话（先让它播放一次声音）", false);
+            string msg = string.Format(L10n.Get("OsdNoSessionApp"), appName);
+            return new Result(msg, msg + L10n.Get("OsdNoSessionHint"), false);
         }
 
         var online = DeviceManager.EnumerateRenderDevices(DeviceState.Active);
         if (online.Count == 0)
         {
-            return new Result("没有在线输出设备", "没有在线输出设备", false);
+            return new Result(L10n.Get("OsdNoOnlineDevice"), L10n.Get("OsdNoOnlineDevice"), false);
         }
 
         string current = WasapiSessionSource.GetDeviceOfProcesses()

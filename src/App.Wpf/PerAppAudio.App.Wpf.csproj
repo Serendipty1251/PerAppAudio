@@ -10,6 +10,18 @@
     <Resource Include="app-icon.ico" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- 界面语言资源（嵌入 JSON，L10n 按 Culture 载入）。
+         注意：WithCulture=false 必须加——否则 AssignCulture 会把文件名里的
+         「zh-CN」「en」当成文化段，两个文件被映射到同一清单名互相覆盖。 -->
+    <EmbeddedResource Include="Strings.zh-CN.json">
+      <WithCulture>false</WithCulture>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Strings.en.json">
+      <WithCulture>false</WithCulture>
+    </EmbeddedResource>
+  </ItemGroup>
+
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
     <TargetFramework>net8.0-windows</TargetFramework>

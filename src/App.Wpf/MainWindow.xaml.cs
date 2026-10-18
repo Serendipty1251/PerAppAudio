@@ -199,7 +199,8 @@ public partial class MainWindow : Window
         SyncDevices();
 
         var (probeA, probeB2) = _host.Probes;
-        ProbeText.Text = $"A: {(probeA.Available ? "可用" : "不可用")}  |  B2: {(probeB2.Available ? "可用" : "不可用")}";
+        ProbeText.Text = string.Format(L10n.Get("ProbeFormat"),
+            probeA.Available ? "✅" : "❌", probeB2.Available ? "✅" : "❌");
 
         var live = _host.Coordinator.GetLiveRoutes();
 
@@ -225,9 +226,9 @@ public partial class MainWindow : Window
                 string.Equals(Path.GetFileName(l.ProcessPath), Path.GetFileName(stored.ProcessPath), StringComparison.OrdinalIgnoreCase));
             bool deviceOnline = _onlineDevices.Contains(stored.DeviceName, StringComparer.Ordinal);
             string status = !deviceOnline
-                ? "设备离线"
+                ? L10n.Get("RouteStatusOffline")
                 : routeLive.ProcessId == 0
-                    ? "等待启动"
+                    ? L10n.Get("RouteStatusWaiting")
                     : routeLive.LoopbackActive
                         ? (routeLive.EndpointApplied ? "A+B2 ✅" : "A ✅")
                         : (routeLive.EndpointApplied ? "B2 ✅" : "…");
@@ -246,7 +247,8 @@ public partial class MainWindow : Window
         // 活动链路列表
         RefreshLiveLinks();
 
-        StatusText.Text = $"v0.4  ·  路由表 {_host.Store.Routes.Count} 条  |  活动链路 {live.Count} 条  |  日志 {App.LogPath}";
+        StatusText.Text = string.Format(L10n.Get("StatusFormat"),
+            _host.Store.Routes.Count, live.Count, App.LogPath);
     }
 
     /// <summary>刷新「活动链路」页：直接重建（行数少，状态每次刷新都变）。</summary>
@@ -268,8 +270,8 @@ public partial class MainWindow : Window
                     RoutingMode.Endpoint => "b",
                     _ => "auto",
                 },
-                LoopbackText = l.LoopbackActive ? (l.AwaitingDevice ? "暂停(等设备)" : "✅ 运行中") : "—",
-                EndpointText = l.EndpointApplied ? "✅ 已写" : "—",
+                LoopbackText = l.LoopbackActive ? (l.AwaitingDevice ? L10n.Get("LivePaused") : L10n.Get("LiveRunning")) : "—",
+                EndpointText = l.EndpointApplied ? L10n.Get("LiveWritten") : "—",
                 AppliedAtText = l.AppliedAt.ToString("HH:mm:ss"),
             });
         }
@@ -469,12 +471,7 @@ public partial class MainWindow : Window
                 _sessions.Add(row);
             }
 
-            row.State = s.State switch
-            {
-                PerAppAudio.SessionManager.SessionState.Active => "播放中",
-                PerAppAudio.SessionManager.SessionState.Expired => "已退出",
-                _ => "静默",
-            };
+            row.StateKind = s.State;
         }
 
         foreach (var stale in _sessions.Where(r => !seen.Contains(r.ProcessId)).ToList())
@@ -620,7 +617,7 @@ public partial class MainWindow : Window
         var fg = ForegroundApp();
         if (fg is null)
         {
-            Osd("未取到前台应用", "⚠️");
+            Osd(L10n.Get("OsdNoForeground"), "⚠️");
             return;
         }
 
@@ -634,7 +631,7 @@ public partial class MainWindow : Window
         catch (Exception ex)
         {
             LogBoth($"[热键] {name} 切换设备失败: {ex.Message}");
-            Osd("切换设备失败", "⚠️");
+            Osd(L10n.Get("OsdSwitchFailed"), "⚠️");
         }
 
         RefreshThreadSafe();
@@ -646,7 +643,7 @@ public partial class MainWindow : Window
         var fg = ForegroundApp();
         if (fg is null)
         {
-            Osd("未取到前台应用", "⚠️");
+            Osd(L10n.Get("OsdNoForeground"), "⚠️");
             return;
         }
 
@@ -654,13 +651,13 @@ public partial class MainWindow : Window
         var r = SessionActions.NudgeVolume(pid, delta);
         if (r is null)
         {
-            Osd($"{name} 没有音频会话", "⚠️");
+            Osd(string.Format(L10n.Get("OsdNoSessionApp"), name), "⚠️");
             return;
         }
 
         var (before, after, affected) = r.Value;
         LogBoth($"[热键] {name} 音量 {before:F2} → {after:F2}（{affected} 个会话）");
-        Osd($"{name} 音量 {after:P0}", after == 0 ? "🔇" : "🔊");
+        Osd(string.Format(L10n.Get("OsdVolume"), name, after), after == 0 ? "🔇" : "🔊");
     }
 
     /// <summary>前台应用静音切换。</summary>
@@ -669,7 +666,7 @@ public partial class MainWindow : Window
         var fg = ForegroundApp();
         if (fg is null)
         {
-            Osd("未取到前台应用", "⚠️");
+            Osd(L10n.Get("OsdNoForeground"), "⚠️");
             return;
         }
 
@@ -677,13 +674,13 @@ public partial class MainWindow : Window
         var r = SessionActions.ToggleMute(pid);
         if (r is null)
         {
-            Osd($"{name} 没有音频会话", "⚠️");
+            Osd(string.Format(L10n.Get("OsdNoSessionApp"), name), "⚠️");
             return;
         }
 
         var (muted, affected) = r.Value;
         LogBoth($"[热键] {name} {(muted ? "静音" : "取消静音")}（{affected} 个会话）");
-        Osd($"{name} {(muted ? "已静音" : "已取消静音")}", muted ? "🔇" : "🔊");
+        Osd(string.Format(L10n.Get(muted ? "OsdMuted" : "OsdUnmuted"), name), muted ? "🔇" : "🔊");
     }
 
     // ---------- 菜单栏 ----------
@@ -723,13 +720,13 @@ public partial class MainWindow : Window
 
     /// <summary>用记事本打开数据文件（路由表 / 规则 / 日志），便于查看与编辑。</summary>
     private void MenuOpenRoutes_Click(object sender, RoutedEventArgs e)
-        => OpenInNotepad(RouteStore.DefaultPath, "路由表");
+        => OpenInNotepad(RouteStore.DefaultPath, L10n.Get("LabelRoutesFile"));
 
     private void MenuOpenRules_Click(object sender, RoutedEventArgs e)
-        => OpenInNotepad(RuleSet.DefaultPath, "规则文件");
+        => OpenInNotepad(RuleSet.DefaultPath, L10n.Get("LabelRulesFile"));
 
     private void MenuOpenLog_Click(object sender, RoutedEventArgs e)
-        => OpenInNotepad(App.LogPath, "日志文件");
+        => OpenInNotepad(App.LogPath, L10n.Get("LabelLogFile"));
 
     private static void OpenInNotepad(string path, string label)
     {
@@ -737,7 +734,7 @@ public partial class MainWindow : Window
         {
             if (!File.Exists(path))
             {
-                System.Windows.MessageBox.Show($"未找到{label}：\n{path}\n\n（程序尚未生成过该文件）",
+                System.Windows.MessageBox.Show(string.Format(L10n.Get("MsgFileNotFound"), label, path),
                     "PerAppAudio", MessageBoxButton.OK, MessageBoxImage.Information);
                 return;
             }
@@ -746,7 +743,7 @@ public partial class MainWindow : Window
         }
         catch (Exception ex)
         {
-            System.Windows.MessageBox.Show($"打开{label}失败：{ex.Message}",
+            System.Windows.MessageBox.Show(string.Format(L10n.Get("MsgOpenFailed"), label, ex.Message),
                 "PerAppAudio", MessageBoxButton.OK, MessageBoxImage.Warning);
         }
     }
@@ -785,7 +782,7 @@ public partial class MainWindow : Window
             return false;
         }
 
-        if (OnlyPlayingCheck?.IsChecked == true && row.State != "播放中")
+        if (OnlyPlayingCheck?.IsChecked == true && row.StateKind != PerAppAudio.SessionManager.SessionState.Active)
         {
             return false;
         }
@@ -857,6 +854,7 @@ public partial class MainWindow : Window
             HotkeyMuteBox.Text = _settings.HotkeyMute;
             HotkeyShowWindowBox.Text = _settings.HotkeyShowWindow;
             HotkeyShowFlyoutBox.Text = _settings.HotkeyShowFlyout;
+            LanguageBox.SelectedIndex = string.Equals(_settings.Language, "en", StringComparison.OrdinalIgnoreCase) ? 1 : 0;
         }
         finally
         {
@@ -899,6 +897,21 @@ public partial class MainWindow : Window
         AutoRefreshCheck.IsChecked = _settings.AutoRefresh;
         _refreshTimer.IsEnabled = _settings.AutoRefresh;
         App.Settings = _settings;
+    }
+
+    /// <summary>语言切换：保存设置 → 重载语言字典（所有 {loc:Loc} 绑定即时刷新）。</summary>
+    private void Language_Changed(object sender, SelectionChangedEventArgs e)
+    {
+        if (_loadingSettings)
+        {
+            return;
+        }
+
+        _settings.Language = LanguageBox.SelectedIndex == 1 ? "en" : "zh-CN";
+        _settings.Save();
+        L10n.Load(_settings.Language);
+        App.Settings = _settings;
+        AppendLog($"[设置] 界面语言 → {_settings.Language}");
     }
 
     /// <summary>保存热键配置并通知热键管理器重注册。</summary>
@@ -1138,29 +1151,34 @@ public sealed class SessionRow : INotifyPropertyChanged
         set { _volume = value; OnPropertyChanged(); }
     }
 
-    private string _state = "静默";
-    public string State
+    private PerAppAudio.SessionManager.SessionState _stateKind;
+
+    /// <summary>会话状态（枚举真相源；展示与颜色均由此派生，语言切换不错乱）。</summary>
+    public PerAppAudio.SessionManager.SessionState StateKind
     {
-        get => _state;
+        get => _stateKind;
         set
         {
-            _state = value;
-            StateBrush = value switch
-            {
-                "播放中" => System.Windows.Media.Brushes.ForestGreen,
-                "已退出" => System.Windows.Media.Brushes.Gray,
-                _ => System.Windows.Media.Brushes.Orange,
-            };
-            OnPropertyChanged();
+            _stateKind = value;
+            OnPropertyChanged(nameof(State));
+            OnPropertyChanged(nameof(StateBrush));
+            OnPropertyChanged(nameof(SortRank));
         }
     }
 
-    private System.Windows.Media.Brush _stateBrush = System.Windows.Media.Brushes.Orange;
-    public System.Windows.Media.Brush StateBrush
+    public string State => _stateKind switch
     {
-        get => _stateBrush;
-        private set { _stateBrush = value; OnPropertyChanged(); }
-    }
+        PerAppAudio.SessionManager.SessionState.Active => L10n.Get("StatePlaying"),
+        PerAppAudio.SessionManager.SessionState.Expired => L10n.Get("StateExpired"),
+        _ => L10n.Get("StateSilent"),
+    };
+
+    public System.Windows.Media.Brush StateBrush => _stateKind switch
+    {
+        PerAppAudio.SessionManager.SessionState.Active => System.Windows.Media.Brushes.ForestGreen,
+        PerAppAudio.SessionManager.SessionState.Expired => System.Windows.Media.Brushes.Gray,
+        _ => System.Windows.Media.Brushes.Orange,
+    };
 
     private string _currentDevice = "-";
     public string CurrentDevice
@@ -1173,7 +1191,7 @@ public sealed class SessionRow : INotifyPropertyChanged
     public bool CanApply => !string.Equals(DeviceName, CurrentDevice, StringComparison.OrdinalIgnoreCase);
 
     /// <summary>排序权重：播放中优先。</summary>
-    public int SortRank => State == "播放中" ? 0 : 1;
+    public int SortRank => _stateKind == PerAppAudio.SessionManager.SessionState.Active ? 0 : 1;
 
     public event PropertyChangedEventHandler? PropertyChanged;
     private void OnPropertyChanged([CallerMemberName] string? name = null) =>

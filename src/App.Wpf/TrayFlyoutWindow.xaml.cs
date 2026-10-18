@@ -271,13 +271,13 @@ public partial class TrayFlyoutWindow : Window
         ProfileList.Children.Clear();
         if (host.Rules.Profiles.Count == 0)
         {
-            ProfileList.Children.Add(new TextBlock
-            {
-                Text = "（rules.yaml 无场景）",
-                FontSize = 11,
-                Foreground = (System.Windows.Media.Brush)FindResource("MutedBrush"),
-                VerticalAlignment = VerticalAlignment.Center,
-            });
+        ProfileList.Children.Add(new TextBlock
+        {
+            Text = L10n.Get("HintNoProfiles"),
+            FontSize = 11,
+            Foreground = (System.Windows.Media.Brush)FindResource("MutedBrush"),
+            VerticalAlignment = VerticalAlignment.Center,
+        });
             return;
         }
 
@@ -374,12 +374,12 @@ public partial class TrayFlyoutWindow : Window
             string msg = $"[托盘] 场景 {report.ProfileName}：命中 {report.MatchedProcesses} 进程，" +
                          $"应用 {report.AppliedRoutes.Count} 条，{report.Elapsed.TotalMilliseconds:F0} ms";
             App.AppendFileLog(msg);
-            Osd($"场景 {name} 已应用", "🎚️");
+            Osd(string.Format(L10n.Get("OsdProfileApplied"), name), "🎚️");
         }
         catch (Exception ex)
         {
             App.AppendFileLog($"[托盘] 场景 {name} 应用失败: {ex.Message}");
-            Osd($"场景 {name} 应用失败", "⚠️");
+            Osd(string.Format(L10n.Get("OsdProfileFailed"), name), "⚠️");
         }
 
         Reload();
