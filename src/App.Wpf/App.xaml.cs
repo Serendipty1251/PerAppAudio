@@ -143,6 +143,59 @@ public partial class App : System.Windows.Application
             testTimer.Start();
         }
 
+        // 音板自测：顺序播放音效库全部音效（每个 2.2s），验证解码+渲染全链路
+        if (Environment.GetEnvironmentVariable("PERAPPAUDIO_TEST_SOUNDPAD") == "1")
+        {
+            AppendFileLog("[自测] PERAPPAUDIO_TEST_SOUNDPAD=1：3 秒后顺序播放全部音效");
+            var spTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(3) };
+            spTimer.Tick += (_, _) =>
+            {
+                spTimer.Stop();
+                var sounds = _window!.SoundPad.Rescan().ToList();
+                if (sounds.Count == 0)
+                {
+                    AppendFileLog("[自测] 音效库为空，跳过（先放 wav/mp3 进 sounds 文件夹）");
+                    return;
+                }
+
+                string? deviceId = null;
+                try
+                {
+                    deviceId = WasapiInterop.DeviceManager.ResolveDevice(Settings.SoundpadDevice).Id;
+                }
+                catch
+                {
+                    var devices = WasapiInterop.DeviceManager.EnumerateRenderDevices(WasapiInterop.DeviceState.Active);
+                    deviceId = (devices.FirstOrDefault(d => d.IsDefaultConsole) ?? devices.FirstOrDefault())?.Id;
+                }
+
+                if (deviceId is null)
+                {
+                    AppendFileLog("[自测] 无可用输出设备，跳过");
+                    return;
+                }
+
+                int index = 0;
+                var playNext = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(2200) };
+                playNext.Tick += (_, _) =>
+                {
+                    if (index >= sounds.Count)
+                    {
+                        playNext.Stop();
+                        _window!.SoundPad.StopAll();
+                        AppendFileLog("[自测] 音板自测完成（已停止）");
+                        return;
+                    }
+
+                    var sound = sounds[index++];
+                    AppendFileLog($"[自测] 播放 {sound.Name}");
+                    _window!.SoundPad.Toggle(sound, deviceId, Settings.SoundpadVolume);
+                };
+                playNext.Start();
+            };
+            spTimer.Start();
+        }
+
         _ = _host.StartAsync();
     }
 

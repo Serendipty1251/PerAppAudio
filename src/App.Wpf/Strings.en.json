@@ -150,5 +150,14 @@
   "UsageProfile": "Profile switching",
   "UsageProfileDesc": "define profiles in rules.yaml, switch from the header or the tray",
   "UsageLog": "Log",
-  "UsageLogDesc": "every action and failure is recorded on the Log page; open the log file from the Tools menu"
+  "UsageLogDesc": "every action and failure is recorded on the Log page; open the log file from the Tools menu",
+  "TabSoundpad": "Soundboard",
+  "MenuTabSoundpad": "_Soundboard",
+  "SpDevice": "Output:",
+  "SpToMic": "To microphone",
+  "SpVolume": "Volume:",
+  "SpStopAll": "Stop All",
+  "SpOpenFolder": "Sounds Folder",
+  "SpHint": "Drop wav/mp3 files into the sounds folder and buttons appear automatically; click to play, click again to stop, and multiple can play at once. \"To microphone\" routes via the VoiceMeeter Input virtual device (requires VoiceMeeter running). Volume applies to the next playback.",
+  "SpEmpty": "The sounds folder is empty — click \"Sounds Folder\" to add wav/mp3 files."
 }

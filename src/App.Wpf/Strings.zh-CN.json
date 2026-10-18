@@ -150,5 +150,14 @@
   "UsageProfile": "场景切换",
   "UsageProfileDesc": "在 rules.yaml 定义场景，用顶部「场景」或托盘一键切换",
   "UsageLog": "日志",
-  "UsageLogDesc": "每次操作与失败原因均记录在日志页，可经工具菜单打开日志文件"
+  "UsageLogDesc": "每次操作与失败原因均记录在日志页，可经工具菜单打开日志文件",
+  "TabSoundpad": "音板",
+  "MenuTabSoundpad": "_音板",
+  "SpDevice": "输出设备:",
+  "SpToMic": "送入麦克风",
+  "SpVolume": "音量:",
+  "SpStopAll": "全部停止",
+  "SpOpenFolder": "音效文件夹",
+  "SpHint": "把 wav/mp3 放进音效文件夹即自动出现按钮；点击播放、再点停止，可多个同时播放。「送入麦克风」经 VoiceMeeter Input 虚拟设备进麦克风（需 VoiceMeeter 在运行）。音量对下次播放生效。",
+  "SpEmpty": "音效文件夹为空——点「音效文件夹」放入 wav/mp3 文件。"
 }

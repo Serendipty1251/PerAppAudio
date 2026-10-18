@@ -107,7 +107,8 @@ dotnet publish src/App.Cli -c Release -r win-x64 --self-contained true \
   - 「路由表」：持久路由编辑（设备下拉 / 手段 / 音量滑条 / 移除；删除时自动拆活动链路）；
   - 「活动链路」：实时路由快照 + 单链断开；
   - 「日志」：搜索 + 级别过滤；
-  - 「设置」：开机自启 / OSD / 刷新策略 / 6 个全局热键配置 / 中英文界面切换。
+  - 「设置」：开机自启 / OSD / 刷新策略 / 6 个全局热键配置 / 中英文界面切换；
+  - 「音板」：wav/mp3 音效点击播放（可多个同时）、输出设备可选、「送入麦克风」经 VoiceMeeter 虚拟链路。
   - 关窗即最小化到托盘；**左键托盘图标**（或 Ctrl+Alt+F）弹出快捷面板（会话快切 / 场景 / 退出）。
 - 诊断 `PerAppAudio.Cli.exe`：devices / sessions / sessionvol / mic / ctl / profile 全套命令。
 - 数据在 `%APPDATA%\PerAppAudio\`（routes.json / rules.yaml / ui.json / app.log）。

@@ -11,6 +11,7 @@ using PerAppAudio.RuleEngine;
 using PerAppAudio.SessionManager;
 using PerAppAudio.WasapiInterop;
 using ComboBox = System.Windows.Controls.ComboBox;
+using WpfButton = System.Windows.Controls.Button;
 
 namespace PerAppAudio.App.Wpf;
 
@@ -24,6 +25,7 @@ public partial class MainWindow : Window
     private readonly DispatcherTimer _refreshTimer;
     private readonly DispatcherTimer _refreshCoalesce;
     private readonly DispatcherTimer _volumeDebounce;
+    private readonly SoundPadService _soundpad = new();
     private RouteRow? _volumePendingRow;
     private readonly ObservableCollection<RouteRow> _rows = new();
     private readonly ObservableCollection<SessionRow> _sessions = new();
@@ -78,9 +80,21 @@ public partial class MainWindow : Window
         LogList.ItemsSource = _logEntries;
         LoadSettingsPage();
 
-        Loaded += (_, _) => { RestoreWindowGeometry(); Refresh(); };
-        Closed += (_, _) => SaveWindowGeometry();
+        Loaded += (_, _) => { RestoreWindowGeometry(); Refresh(); RefreshSoundButtons(); };
+        Closed += (_, _) => { SaveWindowGeometry(); _soundpad.Dispose(); };
         Closing += Window_Closing;
+
+        // 音板播放状态变化（播放线程触发 → marshalling 回 UI 线程刷新按钮高亮）
+        _soundpad.StateChanged += () => Dispatcher.BeginInvoke(DispatcherPriority.Background, RefreshSoundButtons);
+
+        // 切到音板页时重扫（用户可能刚往文件夹放了新文件）
+        MainTabs.SelectionChanged += (_, _) =>
+        {
+            if (MainTabs.SelectedIndex == 4)
+            {
+                RefreshSoundButtons();
+            }
+        };
     }
 
     // ---------- 展示 ----------
@@ -168,6 +182,9 @@ public partial class MainWindow : Window
         WindowState = WindowState.Normal;
         Activate();
     }
+
+    /// <summary>音板服务（自测/调试入口）。</summary>
+    public SoundPadService SoundPad => _soundpad;
 
     public void AllowClose() => _allowClose = true;
 
@@ -753,6 +770,145 @@ public partial class MainWindow : Window
 
     private void MenuTabLog_Click(object sender, RoutedEventArgs e) => MainTabs.SelectedIndex = 3;
 
+    private void MenuTabSoundpad_Click(object sender, RoutedEventArgs e) => MainTabs.SelectedIndex = 4;
+
+    // ---------- 音板（SoundPad） ----------
+
+    /// <summary>解析音板输出目标：送入麦克风 → VoiceMeeter Input；否则选定设备（空=系统默认）。</summary>
+    private string? ResolveSoundpadDeviceId()
+    {
+        if (_settings.SoundpadToMic)
+        {
+            string? vm = SoundPadService.FindVoiceMeeterInputId();
+            if (vm is null)
+            {
+                AppendLog("[音板] 未找到 VoiceMeeter Input 虚拟设备（「送入麦克风」需要 VoiceMeeter 在运行）");
+            }
+            return vm;
+        }
+
+        string name = DeviceNaming.Bare(SoundpadDeviceBox.SelectedItem as string ?? _settings.SoundpadDevice);
+        if (string.IsNullOrEmpty(name))
+        {
+            var devices = DeviceManager.EnumerateRenderDevices(DeviceState.Active);
+            name = (devices.FirstOrDefault(d => d.IsDefaultConsole) ?? devices.FirstOrDefault())?.FriendlyName ?? string.Empty;
+        }
+
+        try
+        {
+            return string.IsNullOrEmpty(name) ? null : DeviceManager.ResolveDevice(name).Id;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    /// <summary>重建音板按钮网格。</summary>
+    private void RefreshSoundButtons()
+    {
+        SoundButtons.Children.Clear();
+        var sounds = _soundpad.Rescan();
+
+        foreach (var sound in sounds)
+        {
+            bool playing = _soundpad.IsPlaying(sound.Name);
+            var button = new WpfButton
+            {
+                Content = sound.Name,
+                Style = (Style)FindResource(playing ? "PrimaryButton" : "GhostButton"),
+                Padding = new Thickness(14, 8, 14, 8),
+                Margin = new Thickness(0, 0, 8, 8),
+                FontSize = 12,
+                Tag = sound,
+                ToolTip = sound.FilePath,
+            };
+            button.Click += SoundButton_Click;
+            SoundButtons.Children.Add(button);
+        }
+
+        SoundpadEmptyHint.Visibility = sounds.Count == 0
+            ? System.Windows.Visibility.Visible
+            : System.Windows.Visibility.Collapsed;
+    }
+
+    private void SoundButton_Click(object sender, RoutedEventArgs e)
+    {
+        if ((sender as FrameworkElement)?.Tag is not SoundItem sound)
+        {
+            return;
+        }
+
+        string? deviceId = ResolveSoundpadDeviceId();
+        if (deviceId is null)
+        {
+            AppendLog("[音板] 无可用输出设备");
+            return;
+        }
+
+        _soundpad.Toggle(sound, deviceId, _settings.SoundpadVolume);
+    }
+
+    private void SoundpadStopAll_Click(object sender, RoutedEventArgs e)
+    {
+        _soundpad.StopAll();
+    }
+
+    private void SoundpadOpenFolder_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("explorer.exe", SoundPadService.SoundsDirectory)
+            {
+                UseShellExecute = true,
+            });
+        }
+        catch (Exception ex)
+        {
+            AppendLog($"[音板] 打开音效文件夹失败: {ex.Message}");
+        }
+    }
+
+    private void SoundpadDevice_Changed(object sender, SelectionChangedEventArgs e)
+    {
+        if (_loadingSettings)
+        {
+            return;
+        }
+
+        _settings.SoundpadDevice = DeviceNaming.Bare(SoundpadDeviceBox.SelectedItem as string ?? string.Empty);
+        _settings.Save();
+        App.Settings = _settings;
+    }
+
+    private void SoundpadOption_Changed(object sender, RoutedEventArgs e)
+    {
+        if (_loadingSettings)
+        {
+            return;
+        }
+
+        _settings.SoundpadToMic = SoundpadToMicCheck.IsChecked == true;
+        _settings.Save();
+        App.Settings = _settings;
+        if (_settings.SoundpadToMic && SoundPadService.FindVoiceMeeterInputId() is null)
+        {
+            AppendLog("[音板] 未找到 VoiceMeeter Input（需要 VoiceMeeter 在运行；音效将改走 VoiceMeeter 虚拟链路）");
+        }
+    }
+
+    private void SoundpadVolume_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (_loadingSettings)
+        {
+            return;
+        }
+
+        _settings.SoundpadVolume = (float)Math.Clamp(e.NewValue, 0, 1);
+        _settings.Save();
+        App.Settings = _settings;
+    }
+
     private void MenuMinimizeToTray_Click(object sender, RoutedEventArgs e) => Hide();
 
     /// <summary>退出：经 App.ExitApplication 走 AllowClose + Shutdown，正常拆除路由与托盘。</summary>
@@ -900,6 +1056,15 @@ public partial class MainWindow : Window
             HotkeyShowWindowBox.Text = _settings.HotkeyShowWindow;
             HotkeyShowFlyoutBox.Text = _settings.HotkeyShowFlyout;
             LanguageBox.SelectedIndex = string.Equals(_settings.Language, "en", StringComparison.OrdinalIgnoreCase) ? 1 : 0;
+
+            // 音板控件（设置里存裸名，下拉框是展示名）
+            if (!string.IsNullOrEmpty(_settings.SoundpadDevice))
+            {
+                SoundpadDeviceBox.SelectedItem = Devices.FirstOrDefault(d =>
+                    string.Equals(DeviceNaming.Bare(d), _settings.SoundpadDevice, StringComparison.OrdinalIgnoreCase));
+            }
+            SoundpadToMicCheck.IsChecked = _settings.SoundpadToMic;
+            SoundpadVolumeSlider.Value = _settings.SoundpadVolume;
         }
         finally
         {

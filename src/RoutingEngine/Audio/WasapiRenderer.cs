@@ -29,15 +29,38 @@ public sealed class WasapiRenderer : IDisposable
     }
 
     public static WasapiRenderer Start(string deviceId, int bufferMilliseconds)
+        => Start(deviceId, bufferMilliseconds, null);
+
+    /// <summary>
+    /// 启动渲染客户端。<paramref name="requestedFormat"/> 非空时按该格式初始化
+    /// （共享模式下音频引擎自动做重采样/声道转换——音板播放任意采样率的音效即靠此，
+    /// 无需自研重采样链）；为空用设备 Mix 格式。
+    /// </summary>
+    public static WasapiRenderer Start(string deviceId, int bufferMilliseconds, WAVEFORMATEX? requestedFormat)
     {
         var device = DeviceManager.GetDevice(deviceId);
         var client = DeviceManager.ActivateAudioClient(device);
 
-        client.GetMixFormat(out IntPtr mixPtr);
+        IntPtr mixPtr = IntPtr.Zero;
+        IntPtr usePtr;
+        bool ownsPtr;
+        if (requestedFormat is { } fmt)
+        {
+            usePtr = Marshal.AllocCoTaskMem(Marshal.SizeOf<WAVEFORMATEX>());
+            Marshal.StructureToPtr(fmt, usePtr, false);
+            ownsPtr = true;
+        }
+        else
+        {
+            client.GetMixFormat(out mixPtr);
+            usePtr = mixPtr;
+            ownsPtr = false;
+        }
+
         WAVEFORMATEX format;
         try
         {
-            format = Marshal.PtrToStructure<WAVEFORMATEX>(mixPtr);
+            format = Marshal.PtrToStructure<WAVEFORMATEX>(usePtr);
             var sessionGuid = Guid.Empty;
             long hnsBufferDuration = bufferMilliseconds * 10_000L;
             client.Initialize(
@@ -45,12 +68,20 @@ public sealed class WasapiRenderer : IDisposable
                 AudioClientStreamFlags.EventCallback,
                 hnsBufferDuration,
                 0,
-                mixPtr,
+                usePtr,
                 ref sessionGuid);
         }
         finally
         {
-            Marshal.FreeCoTaskMem(mixPtr);
+            if (ownsPtr)
+            {
+                Marshal.DestroyStructure<WAVEFORMATEX>(usePtr);
+                Marshal.FreeCoTaskMem(usePtr);
+            }
+            else
+            {
+                Marshal.FreeCoTaskMem(mixPtr);
+            }
         }
 
         var renderIid = Guid.Parse(Guids.IID_IAudioRenderClient);
@@ -69,6 +100,9 @@ public sealed class WasapiRenderer : IDisposable
 
     /// <summary>缓冲区剩余可写帧数。</summary>
     public int GetFreeFrames() => BufferFrames - _client.GetCurrentPadding();
+
+    /// <summary>事件驱动等待「设备可写」信号（音板等播放泵用）；超时返回 false。</summary>
+    public bool WaitForPacket(int timeoutMilliseconds) => _packetEvent.WaitOne(timeoutMilliseconds);
 
     /// <summary>
     /// 设置本渲染流会话的音量（P2 音量守护：手段A 的目标设备独立音量）。

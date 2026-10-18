@@ -27,6 +27,16 @@ public sealed class AppSettings
     public string Language { get; set; } = "zh-CN";
     public string Theme { get; set; } = "Light";
 
+    // ---- 音板（SoundPad）----
+    /// <summary>音板输出设备（友好名；空 = 跟随系统默认）。</summary>
+    public string SoundpadDevice { get; set; } = string.Empty;
+
+    /// <summary>音板总音量 0–1。</summary>
+    public float SoundpadVolume { get; set; } = 0.8f;
+
+    /// <summary>送入麦克风：渲染到 VoiceMeeter Input 虚拟设备（经 VoiceMeeter 进虚拟麦克风）。</summary>
+    public bool SoundpadToMic { get; set; }
+
     // ---- 全局热键（空字符串 = 禁用该热键）----
     public string HotkeyNextOutput { get; set; } = "Ctrl+Alt+Right";
     public string HotkeyVolumeUp { get; set; } = "Ctrl+Alt+Up";

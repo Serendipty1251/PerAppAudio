@@ -35,6 +35,7 @@
                 <MenuItem Header="{loc:Loc MenuTabRoutes}" Click="MenuTabRoutes_Click"/>
                 <MenuItem Header="{loc:Loc MenuTabLive}" Click="MenuTabLive_Click"/>
                 <MenuItem Header="{loc:Loc MenuTabLog}" Click="MenuTabLog_Click"/>
+                <MenuItem Header="{loc:Loc MenuTabSoundpad}" Click="MenuTabSoundpad_Click"/>
                 <Separator/>
                 <MenuItem Header="{loc:Loc MenuMinimize}" Click="MenuMinimizeToTray_Click"/>
                 <MenuItem Header="{loc:Loc MenuExit}" Click="MenuExit_Click"/>
@@ -287,7 +288,39 @@
                     </ListBox>
                 </DockPanel>
             </TabItem>
-            <!-- Tab 5：设置 -->
+            <!-- Tab 5：音板 -->
+            <TabItem Header="{loc:Loc TabSoundpad}">
+                <DockPanel Margin="8">
+                    <!-- 工具条 -->
+                    <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="0,0,0,8">
+                        <TextBlock Text="{loc:Loc SpDevice}" VerticalAlignment="Center" Margin="0,0,6,0"
+                                   Foreground="{StaticResource MutedBrush}"/>
+                        <ComboBox x:Name="SoundpadDeviceBox" Width="200" SelectionChanged="SoundpadDevice_Changed"
+                                  ItemsSource="{Binding Devices, RelativeSource={RelativeSource AncestorType=Window}}"/>
+                        <CheckBox x:Name="SoundpadToMicCheck" Content="{loc:Loc SpToMic}" Margin="12,0,0,0"
+                                  VerticalAlignment="Center" Checked="SoundpadOption_Changed" Unchecked="SoundpadOption_Changed"/>
+                        <TextBlock Text="{loc:Loc SpVolume}" VerticalAlignment="Center" Margin="12,0,6,0"
+                                   Foreground="{StaticResource MutedBrush}"/>
+                        <Slider x:Name="SoundpadVolumeSlider" Width="100" Minimum="0" Maximum="1"
+                                VerticalAlignment="Center" ValueChanged="SoundpadVolume_ValueChanged"/>
+                        <Button Content="{loc:Loc SpStopAll}" Style="{StaticResource GhostButton}" Margin="12,0,0,0"
+                                Click="SoundpadStopAll_Click"/>
+                        <Button Content="{loc:Loc SpOpenFolder}" Style="{StaticResource GhostButton}" Margin="8,0,0,0"
+                                Click="SoundpadOpenFolder_Click"/>
+                    </StackPanel>
+
+                    <TextBlock DockPanel.Dock="Top" Text="{loc:Loc SpHint}"
+                               Foreground="{StaticResource MutedBrush}" FontSize="11" Margin="0,0,0,8" TextWrapping="Wrap"/>
+
+                    <TextBlock x:Name="SoundpadEmptyHint" DockPanel.Dock="Top" Text="{loc:Loc SpEmpty}"
+                               Foreground="{StaticResource MutedBrush}" FontSize="12" Margin="4,0,0,8"/>
+
+                    <ScrollViewer VerticalScrollBarVisibility="Auto">
+                        <WrapPanel x:Name="SoundButtons" Orientation="Horizontal"/>
+                    </ScrollViewer>
+                </DockPanel>
+            </TabItem>
+            <!-- Tab 6：设置 -->
             <TabItem Header="{loc:Loc TabSettings}">
                 <ScrollViewer Margin="8" VerticalScrollBarVisibility="Auto">
                     <StackPanel MaxWidth="560" HorizontalAlignment="Left">
