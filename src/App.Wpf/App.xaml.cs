@@ -189,7 +189,7 @@ public partial class App : System.Windows.Application
 
                     var sound = sounds[index++];
                     AppendFileLog($"[自测] 播放 {sound.Name}");
-                    _window!.SoundPad.Toggle(sound, deviceId, Settings.SoundpadVolume);
+                    _window!.SoundPad.Toggle(sound, new PlayTargets(deviceId, null), Settings.SoundpadVolume);
                 };
                 playNext.Start();
             };

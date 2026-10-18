@@ -30,6 +30,10 @@ public sealed class HotkeyManager
     public const int IdShowWindow = 5;
     public const int IdShowFlyout = 6;
 
+    /// <summary>音板热键 ID 起点（100+i；分发时 id &gt;= 100 即音板热键，索引 = id - 100）。</summary>
+    public const int SoundpadHotkeyBase = 100;
+    public const int SoundpadHotkeyMax = 200;
+
     private readonly Window _window;
     private readonly Action<int> _dispatch;
     private HwndSource? _source;
@@ -120,8 +124,39 @@ public sealed class HotkeyManager
         TryRegister(hwnd, IdShowWindow, "显示窗口", settings.HotkeyShowWindow, failed);
         TryRegister(hwnd, IdShowFlyout, "托盘面板", settings.HotkeyShowFlyout, failed);
 
-        return (6 - failed.Count, failed);
+        // 音板热键（动态）：按 settings.SoundpadHotkeys 顺序分配 100+i
+        _soundpadNames.Clear();
+        int index = 0;
+        foreach (var (name, gesture) in settings.SoundpadHotkeys)
+        {
+            if (string.IsNullOrWhiteSpace(gesture))
+            {
+                continue;
+            }
+            if (index + SoundpadHotkeyBase >= SoundpadHotkeyMax)
+            {
+                failed.Add($"{name}(超出热键数量上限)");
+                break;
+            }
+
+            int id = SoundpadHotkeyBase + index;
+            _soundpadNames[id] = name;
+            TryRegister(hwnd, id, $"音板:{name}", gesture, failed);
+            index++;
+        }
+
+        return (6 + index - failed.Count, failed);
     }
+
+    private readonly Dictionary<int, string> _soundpadNames = new();
+
+    /// <summary>取音板热键对应的音效名（id 非音板区间返回 null）。</summary>
+    public string? GetSoundpadName(int id)
+        => id >= SoundpadHotkeyBase && id < SoundpadHotkeyMax && _soundpadNames.TryGetValue(id, out var name)
+            ? name
+            : null;
+
+    public bool IsSoundpadHotkey(int id) => id >= SoundpadHotkeyBase && id < SoundpadHotkeyMax;
 
     private AppSettings? _pendingSettings;
 
@@ -146,6 +181,11 @@ public sealed class HotkeyManager
         {
             UnregisterHotKey(hwnd, id);
         }
+        foreach (int id in _soundpadNames.Keys.ToList())
+        {
+            UnregisterHotKey(hwnd, id);
+        }
+        _soundpadNames.Clear();
     }
 
     private void TryRegister(IntPtr hwnd, int id, string label, string? gesture, List<string> failed)

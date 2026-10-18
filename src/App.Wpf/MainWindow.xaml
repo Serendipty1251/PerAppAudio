@@ -291,23 +291,41 @@
             <!-- Tab 5：音板 -->
             <TabItem Header="{loc:Loc TabSoundpad}">
                 <DockPanel Margin="8">
-                    <!-- 工具条 -->
-                    <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="0,0,0,8">
-                        <TextBlock Text="{loc:Loc SpDevice}" VerticalAlignment="Center" Margin="0,0,6,0"
+                    <!-- 工具条 1：播放模式与目标 -->
+                    <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="0,0,0,6">
+                        <TextBlock Text="{loc:Loc SpMode}" VerticalAlignment="Center" Margin="0,0,6,0"
+                                   Foreground="{StaticResource MutedBrush}"/>
+                        <ComboBox x:Name="SoundpadModeBox" Width="110" SelectionChanged="SoundpadMode_Changed">
+                            <ComboBoxItem Content="{loc:Loc SpModeSpeakers}"/>
+                            <ComboBoxItem Content="{loc:Loc SpModeMic}"/>
+                            <ComboBoxItem Content="{loc:Loc SpModeBoth}"/>
+                        </ComboBox>
+                        <TextBlock Text="{loc:Loc SpDevice}" VerticalAlignment="Center" Margin="14,0,6,0"
                                    Foreground="{StaticResource MutedBrush}"/>
                         <ComboBox x:Name="SoundpadDeviceBox" Width="200" SelectionChanged="SoundpadDevice_Changed"
                                   ItemsSource="{Binding Devices, RelativeSource={RelativeSource AncestorType=Window}}"/>
-                        <CheckBox x:Name="SoundpadToMicCheck" Content="{loc:Loc SpToMic}" Margin="12,0,0,0"
-                                  VerticalAlignment="Center" Checked="SoundpadOption_Changed" Unchecked="SoundpadOption_Changed"/>
-                        <TextBlock Text="{loc:Loc SpVolume}" VerticalAlignment="Center" Margin="12,0,6,0"
+                        <TextBlock Text="{loc:Loc SpMicDevice}" VerticalAlignment="Center" Margin="14,0,6,0"
                                    Foreground="{StaticResource MutedBrush}"/>
-                        <Slider x:Name="SoundpadVolumeSlider" Width="100" Minimum="0" Maximum="1"
+                        <ComboBox x:Name="SoundpadMicDeviceBox" Width="200" SelectionChanged="SoundpadMicDevice_Changed"/>
+                    </StackPanel>
+
+                    <!-- 工具条 2：音量与操作 -->
+                    <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="0,0,0,8">
+                        <TextBlock Text="{loc:Loc SpVolume}" VerticalAlignment="Center" Margin="0,0,6,0"
+                                   Foreground="{StaticResource MutedBrush}"/>
+                        <Slider x:Name="SoundpadVolumeSlider" Width="120" Minimum="0" Maximum="1"
                                 VerticalAlignment="Center" ValueChanged="SoundpadVolume_ValueChanged"/>
-                        <Button Content="{loc:Loc SpStopAll}" Style="{StaticResource GhostButton}" Margin="12,0,0,0"
+                        <TextBlock x:Name="SoundpadVolumeText" Width="36" VerticalAlignment="Center"
+                                   Margin="4,0,0,0" FontSize="11"/>
+                        <Button Content="{loc:Loc SpStopAll}" Style="{StaticResource GhostButton}" Margin="16,0,0,0"
                                 Click="SoundpadStopAll_Click"/>
                         <Button Content="{loc:Loc SpOpenFolder}" Style="{StaticResource GhostButton}" Margin="8,0,0,0"
                                 Click="SoundpadOpenFolder_Click"/>
                     </StackPanel>
+
+                    <TextBlock x:Name="SoundpadMicHint" DockPanel.Dock="Top" Text="{loc:Loc SpMicHint}"
+                               Foreground="#B45309" FontSize="11" Margin="0,0,0,6" TextWrapping="Wrap"
+                               Visibility="Collapsed"/>
 
                     <TextBlock DockPanel.Dock="Top" Text="{loc:Loc SpHint}"
                                Foreground="{StaticResource MutedBrush}" FontSize="11" Margin="0,0,0,8" TextWrapping="Wrap"/>

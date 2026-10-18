@@ -28,14 +28,23 @@ public sealed class AppSettings
     public string Theme { get; set; } = "Light";
 
     // ---- 音板（SoundPad）----
-    /// <summary>音板输出设备（友好名；空 = 跟随系统默认）。</summary>
+    /// <summary>扬声器目标设备（友好名；空 = 跟随系统默认）。</summary>
     public string SoundpadDevice { get; set; } = string.Empty;
+
+    /// <summary>虚拟麦克风目标设备（友好名；空 = 自动检测 VoiceMeeter Input / CABLE Input 等）。</summary>
+    public string SoundpadMicDevice { get; set; } = string.Empty;
+
+    /// <summary>播放模式：0=仅扬声器 1=仅麦克风 2=两者。默认仅扬声器（开箱即用；虚拟麦克风设备非必需）。</summary>
+    public int SoundpadMode { get; set; } = 0;
 
     /// <summary>音板总音量 0–1。</summary>
     public float SoundpadVolume { get; set; } = 0.8f;
 
-    /// <summary>送入麦克风：渲染到 VoiceMeeter Input 虚拟设备（经 VoiceMeeter 进虚拟麦克风）。</summary>
-    public bool SoundpadToMic { get; set; }
+    /// <summary>每音效热键：音效名（不含扩展名）→ 组合键串，如 "Ctrl+Alt+1"。</summary>
+    public Dictionary<string, string> SoundpadHotkeys { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>开启循环播放的音效名集合。</summary>
+    public List<string> SoundpadLoops { get; set; } = new();
 
     // ---- 全局热键（空字符串 = 禁用该热键）----
     public string HotkeyNextOutput { get; set; } = "Ctrl+Alt+Right";

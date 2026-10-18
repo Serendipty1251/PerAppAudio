@@ -1,0 +1,24 @@
+<Window x:Class="PerAppAudio.App.Wpf.HotkeyCaptureWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:loc="clr-namespace:PerAppAudio.App.Wpf"
+        Title="{loc:Loc SpHotkeyTitle}" Height="200" Width="380"
+        WindowStartupLocation="CenterOwner" ResizeMode="NoResize"
+        ShowInTaskbar="False" Background="{StaticResource SurfaceBrush}">
+    <StackPanel Margin="20">
+        <TextBlock x:Name="PromptText" Text="{loc:Loc SpHotkeyPrompt}" FontSize="13" Margin="0,0,0,10"/>
+        <TextBox x:Name="GestureBox" Height="30" FontSize="14" IsReadOnly="True" IsReadOnlyCaretVisible="False"
+                 HorizontalContentAlignment="Center" VerticalContentAlignment="Center"
+                 PreviewKeyDown="GestureBox_PreviewKeyDown"/>
+        <TextBlock Text="{loc:Loc SpHotkeyHint}" FontSize="11" Margin="0,6,0,16"
+                   Foreground="{StaticResource MutedBrush}" TextWrapping="Wrap"/>
+        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+            <Button Content="{loc:Loc BtnClear}" Style="{StaticResource GhostButton}" Padding="14,4"
+                    Margin="0,0,8,0" Click="Clear_Click"/>
+            <Button Content="{loc:Loc BtnOk}" Style="{StaticResource PrimaryButton}" Padding="14,4"
+                    Margin="0,0,8,0" Click="Ok_Click" IsDefault="True"/>
+            <Button Content="{loc:Loc BtnCancel}" Style="{StaticResource GhostButton}" Padding="14,4"
+                    Click="Cancel_Click" IsCancel="True"/>
+        </StackPanel>
+    </StackPanel>
+</Window>
