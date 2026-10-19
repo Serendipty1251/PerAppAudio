@@ -150,5 +150,9 @@
   "UsageProfile": "Profile switching",
   "UsageProfileDesc": "define profiles in rules.yaml, switch from the header or the tray",
   "UsageLog": "Log",
-  "UsageLogDesc": "every action and failure is recorded on the Log page; open the log file from the Tools menu"
+  "UsageLogDesc": "every action and failure is recorded on the Log page; open the log file from the Tools menu",
+  "ColAddProcess": "Process",
+  "ColAddDevice": "Output",
+  "BtnAddRoute": "Add route",
+  "TipProcessPicker": "Type or pick a process name; apps without an audio session (e.g. winmm) can be added here too"
 }

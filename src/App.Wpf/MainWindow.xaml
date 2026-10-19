@@ -161,6 +161,19 @@
                                 Click="ReapplyAll_Click" ToolTip="{loc:Loc TipReapply}"/>
                     </StackPanel>
 
+                    <!-- 添加音源：按进程建路由（无音频会话的应用，如 winmm 类，也能选达出设备） -->
+                    <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="0,0,0,8">
+                        <TextBlock Text="{loc:Loc ColAddProcess}" VerticalAlignment="Center" Margin="0,0,6,0"
+                                   Foreground="{StaticResource MutedBrush}" FontSize="11"/>
+                        <ComboBox x:Name="ProcessPickerBox" Width="200" IsEditable="True"
+                                  ToolTip="{loc:Loc TipProcessPicker}"/>
+                        <TextBlock Text="{loc:Loc ColAddDevice}" VerticalAlignment="Center" Margin="12,0,6,0"
+                                   Foreground="{StaticResource MutedBrush}" FontSize="11"/>
+                        <ComboBox x:Name="AddRouteDeviceBox" Width="180"
+                                  ItemsSource="{Binding Devices, RelativeSource={RelativeSource AncestorType=Window}}"/>
+                        <Button Content="{loc:Loc BtnAddRoute}" Style="{StaticResource GhostButton}" Margin="12,0,0,0"
+                                Click="AddRouteByProcess_Click"/>
+                    </StackPanel>
                     <DataGrid x:Name="RouteGrid" AutoGenerateColumns="False" CanUserAddRows="False"
                               HeadersVisibility="Column" SelectionMode="Single" RowHeight="32">
                         <DataGrid.Columns>

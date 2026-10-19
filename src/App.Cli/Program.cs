@@ -35,6 +35,7 @@ internal static class Program
                 "route" => RunRoute(args),
                 "endpoint" => RunEndpoint(args),
                 "mic" => RunMic(args),
+                "proc" => RunProcList(args),
                 "ctl" => RunCtl(args),
                 "profile" => RunProfile(args),
                 "devlisten" => RunDevListen(args),
@@ -48,6 +49,27 @@ internal static class Program
             Console.Error.WriteLine($"错误: {ex}");
             return 1;
         }
+    }
+
+    /// <summary>列出运行中可识别进程（PID / 名称 / 路径），供「按进程添加路由」与诊断使用。</summary>
+    private static int RunProcList(string[] args)
+    {
+        string? filter = args.Length > 2 ? args[2] : null;
+        var list = ProcessFinder.ListRunning();
+        if (!string.IsNullOrWhiteSpace(filter))
+        {
+            list = list.Where(p => p.Name.Contains(filter, StringComparison.OrdinalIgnoreCase)
+                                || p.Path.Contains(filter, StringComparison.OrdinalIgnoreCase)).ToList();
+        }
+
+        Console.WriteLine($"{"PID",-8} {"名称",-32} 路径");
+        Console.WriteLine(new string('-', 100));
+        foreach (var p in list)
+        {
+            Console.WriteLine($"{p.Pid,-8} {Truncate(p.Name, 30),-32} {p.Path}");
+        }
+        Console.WriteLine($"共 {list.Count} 个进程（仅含 MainModule 可读的；提权/系统进程不显示）");
+        return 0;
     }
 
     private static int Usage()
@@ -65,6 +87,7 @@ internal static class Program
              endpoint clear --pid <PID>   手段B2：清除端点覆盖
              devlisten --device <ID|名称> [--ms <时长>]   监听设备播放能量（验证迁移用）
              mic list                      列出捕获（麦克风）端点
+             proc list [过滤]             列出运行中进程（按进程添加路由用）
              mic set --pid <PID> --to <ID|名称>   每进程默认麦克风（本机平台暂不支持，如实报错）
              mic get --pid <PID>          读回每进程默认麦克风
 

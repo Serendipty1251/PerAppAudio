@@ -150,5 +150,9 @@
   "UsageProfile": "场景切换",
   "UsageProfileDesc": "在 rules.yaml 定义场景，用顶部「场景」或托盘一键切换",
   "UsageLog": "日志",
-  "UsageLogDesc": "每次操作与失败原因均记录在日志页，可经工具菜单打开日志文件"
+  "UsageLogDesc": "每次操作与失败原因均记录在日志页，可经工具菜单打开日志文件",
+  "ColAddProcess": "音源进程",
+  "ColAddDevice": "输出设备",
+  "BtnAddRoute": "添加路由",
+  "TipProcessPicker": "输入或选择进程名；无音频会话的应用（如 winmm 类）也能在此添加"
 }

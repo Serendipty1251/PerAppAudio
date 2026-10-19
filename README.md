@@ -92,7 +92,7 @@ dotnet run --project src/App.Cli -- test                                  # COM 
 3. **IsSystemSoundsSession 签名**：Win11 26200 实测带 `BOOL*` 出参（无参调用直接 AV），已按实测修正 COM 声明。
 4. **VoiceMeeter 设备 loopback 限制**：不镜像外来渲染流——`devlisten` 不能作为 A 链路在虚拟设备上的验收手段（音频确实已写入：实测 96 万帧、实时率 100.1%）。
 
-P2 剩余（v2.0 主功能强化项）：B2 路径音量替代方案（winmm 会话枚举盲区）、规则 DSL 缺口（通配符 / 设备别名 / `default_mode`）、设备插拔物理实测。规划见 [per-app-audio-router-plan.md](per-app-audio-router-plan.md) §0。
+P2' 主功能强化第一批已完成（2026-10-19）：路由表「按进程添加」（无音频会话的应用也能选输出设备）、规则 DSL 补 `default_mode` / `devices:` 别名 / 通配符 + 优先级裁决、B2 音量无条件施加。规划见 [per-app-audio-router-plan.md](per-app-audio-router-plan.md) §12.3。
 
 ## 成品使用（WPF 托盘壳 + 单文件 exe）
 
@@ -105,12 +105,12 @@ dotnet publish src/App.Cli -c Release -r win-x64 --self-contained true \
 
 - 主程序 `PerAppAudio.exe`：单实例托盘常驻（AppHost：探测 + 看门狗 + 2s 扫描自动应用 + 设备事件订阅）；主窗口五页：
   - **「正在播放」**：自动检测系统中有音频会话的应用（默认 10s 刷新），选设备/音量 → 一键改道并持久化；
-  - 「路由表」：持久路由编辑（设备下拉 / 手段 / 音量滑条 / 移除；删除时自动拆活动链路）；
+  - 「路由表」：持久路由编辑（设备下拉 / 手段 / 音量滑条 / 移除；删除时自动拆活动链路）；工具条可**按进程添加**——没有音频会话的应用（winmm 类、尚未发声）也能选择输出设备；
   - 「活动链路」：实时路由快照 + 单链断开；
   - 「日志」：搜索 + 级别过滤；
   - 「设置」：开机自启 / OSD / 刷新策略 / 6 个全局热键配置 / 中英文界面切换；
   - 关窗即最小化到托盘；**左键托盘图标**（或 Ctrl+Alt+F）弹出快捷面板（会话快切 / 场景 / 退出）。
-- 诊断 `PerAppAudio.Cli.exe`：devices / sessions / sessionvol / mic / ctl / profile 全套命令。
+- 诊断 `PerAppAudio.Cli.exe`：devices / sessions / sessionvol / mic / **proc** / ctl / profile 全套命令。
 - 数据在 `%APPDATA%\PerAppAudio\`（routes.json / rules.yaml / ui.json / app.log）。
 
 ## 会话枚举修复（2026-10-16 晚间，重要技术决策）

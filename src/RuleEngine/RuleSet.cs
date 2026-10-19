@@ -5,14 +5,14 @@ namespace PerAppAudio.RuleEngine;
 /// <summary>场景 Profile 中的一条路由规则（P2 精简 DSL：扁平字段）。</summary>
 public sealed class ProfileRule
 {
-    /// <summary>匹配目标：进程名（chrome.exe）或可执行完整路径。</summary>
+    /// <summary>匹配目标：进程名（chrome.exe）、可执行完整路径，或通配符（*Valorant*）。</summary>
     public string Process { get; set; } = string.Empty;
 
-    /// <summary>目标设备：友好名或设备 ID（应用时解析）。</summary>
+    /// <summary>目标设备：别名（devices: 段）/ 设备 ID / 友好名。</summary>
     public string Device { get; set; } = string.Empty;
 
-    /// <summary>手段：auto / a / b。</summary>
-    public string Mode { get; set; } = "auto";
+    /// <summary>手段：auto / a / b。留空 = 用全局 default_mode。</summary>
+    public string Mode { get; set; } = string.Empty;
 
     /// <summary>目标会话音量 0.0–1.0（默认 1.0）。</summary>
     public float Volume { get; set; } = 1f;
@@ -51,21 +51,31 @@ public sealed class DeviceEventRule
 /// rules.yaml 加载器（P2）。
 /// 文件位于 %APPDATA%\PerAppAudio\rules.yaml，schema：
 /// <code>
+/// default_mode: auto        # 可选：全局默认手段 auto / loopback(a) / endpoint(b)
+///                           # 规则未显式写 mode 时用它
+///
+/// devices:                  # 可选：设备别名，rules 的 device: 可写别名而非完整 ID
+///   speaker: "{0.0.0.00000000}.{xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx}"
+///   headset: "Realtek HD Audio 2nd output"
+///
 /// profiles:
 ///   - name: game
 ///     description: 游戏场景
 ///     rules:
-///       - process: chrome.exe
-///         device: VoiceMeeter VAIO3
-///         mode: auto
+///       - process: chrome.exe                          # 进程名
+///         device: speaker                              # 别名 / ID / 友好名
+///         mode: auto                                   # 省略则用 default_mode
 ///         volume: 0.8
 ///         mute: false
+///       - process: "C:/Riot Games/VALORANT/...exe"     # 精确路径
+///       - process: "*Valorant*"                        # 通配符（* 多字符，? 单字符）
 ///
 /// device_events:            # 可选：设备事件触发（插耳机自动切场景）
 ///   - on: activated         # added/removed/activated/deactivated/default_changed/changed
 ///     device: 耳机           # 名称片段，留空 = 任意设备
-///     apply: game           # 命中后应用的 Profile 名
+///     apply: game            # 命中后应用的 Profile 名
 /// </code>
+/// 匹配优先级（同一进程命中多条规则时）：**精确路径 &gt; 进程名 &gt; 通配符**。
 /// 解析器为**最小 YAML 子集**自实现（两级列表嵌套 + 标量字段），零第三方依赖；
 /// 不支持锚点 / 多行字符串 / 引号内冒号等完整 YAML 特性——超出子集的行会报错并带行号。
 /// </summary>
@@ -79,6 +89,20 @@ public sealed class RuleSet
     /// <summary>设备事件触发规则（device_events: 段；无则为空）。</summary>
     public List<DeviceEventRule> DeviceEvents { get; private set; } = new();
 
+    /// <summary>全局默认手段（default_mode:）；规则未显式指定 mode 时使用。默认 auto。</summary>
+    public string DefaultMode { get; private set; } = "auto";
+
+    /// <summary>设备别名表（devices: 段）：别名 → 设备 ID 或友好名。</summary>
+    public Dictionary<string, string> Devices { get; private set; } = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>把规则里的 device 值经别名表解析为真实设备引用；非别名则原样返回。</summary>
+    public string ResolveDeviceName(string deviceOrAlias)
+        => !string.IsNullOrWhiteSpace(deviceOrAlias)
+           && Devices.TryGetValue(deviceOrAlias, out var target)
+           && !string.IsNullOrWhiteSpace(target)
+            ? target
+            : deviceOrAlias;
+
     public static RuleSet Load(string? path = null)
     {
         path ??= DefaultPath;
@@ -88,8 +112,11 @@ public sealed class RuleSet
             return set;
         }
 
-        set.Profiles = ParseProfiles(File.ReadAllLines(path, Encoding.UTF8), path, out var events);
+        set.Profiles = ParseProfiles(File.ReadAllLines(path, Encoding.UTF8), path,
+            out var events, out var defaultMode, out var devices);
         set.DeviceEvents = events;
+        set.DefaultMode = defaultMode;
+        set.Devices = devices;
         return set;
     }
 
@@ -98,14 +125,20 @@ public sealed class RuleSet
 
     // ---------- 最小 YAML 子集解析 ----------
 
-    private static List<Profile> ParseProfiles(string[] lines, string path, out List<DeviceEventRule> deviceEvents)
+    private static List<Profile> ParseProfiles(
+        string[] lines, string path,
+        out List<DeviceEventRule> deviceEvents,
+        out string defaultMode,
+        out Dictionary<string, string> devices)
     {
         var profiles = new List<Profile>();
         deviceEvents = new List<DeviceEventRule>();
+        defaultMode = "auto";
+        devices = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         Profile? current = null;
         ProfileRule? currentRule = null;
         DeviceEventRule? currentEvent = null;
-        string section = string.Empty; // "" | "profiles" | "device_events"
+        string section = string.Empty; // "" | "profiles" | "device_events" | "devices"
 
         foreach (var rawLine in lines)
         {
@@ -134,7 +167,20 @@ public sealed class RuleSet
                     currentEvent = null;
                     continue;
                 }
-                throw new FormatException($"{path}:{lineNo} 顶层只支持 'profiles:' / 'device_events:'，实际是「{text}」");
+                if (text == "devices:")
+                {
+                    section = "devices";
+                    current = null;
+                    currentRule = null;
+                    currentEvent = null;
+                    continue;
+                }
+                if (text.StartsWith("default_mode:", StringComparison.OrdinalIgnoreCase))
+                {
+                    defaultMode = Scalar(text["default_mode:".Length..].Trim());
+                    continue;
+                }
+                throw new FormatException($"{path}:{lineNo} 顶层只支持 'profiles:' / 'device_events:' / 'devices:' / 'default_mode:'，实际是「{text}」");
             }
 
             if (text.StartsWith("- "))
@@ -193,6 +239,17 @@ public sealed class RuleSet
 
             string key = text[..colon].Trim();
             string value = Scalar(text[(colon + 1)..].Trim());
+
+            // devices: 段（别名: 目标）
+            if (section == "devices" && current is null && currentRule is null && currentEvent is null)
+            {
+                if (indent < 2)
+                {
+                    throw new FormatException($"{path}:{lineNo} devices: 条目需要缩进（别名: 设备ID或名称）");
+                }
+                devices[key] = value;
+                continue;
+            }
 
             if (currentEvent is not null && indent > 2)
             {

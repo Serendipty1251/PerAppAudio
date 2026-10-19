@@ -34,6 +34,7 @@ public partial class MainWindow : Window
     private System.ComponentModel.ICollectionView? _logView;
     private bool _allowClose;
     private List<string> _onlineDevices = new();
+    private DateTime _procPickerRefresh = DateTime.MinValue;
     private AppSettings _settings = AppSettings.Load();
 
     public ObservableCollection<string> Devices { get; } = new();
@@ -227,6 +228,13 @@ public partial class MainWindow : Window
     {
         _host.Store.Load();
         SyncDevices();
+
+        // 「按进程添加」下拉节流刷新（进程枚举有成本，5s 一次足够）
+        if ((DateTime.UtcNow - _procPickerRefresh).TotalSeconds >= 5)
+        {
+            _procPickerRefresh = DateTime.UtcNow;
+            RefreshProcessPicker();
+        }
 
         var (probeA, probeB2) = _host.Probes;
         ProbeText.Text = string.Format(L10n.Get("ProbeFormat"),
@@ -759,6 +767,87 @@ public partial class MainWindow : Window
             Refresh();
             e.Handled = true;
         }
+    }
+
+    /// <summary>刷新「按进程添加」的进程下拉（集合变化才重建，避免打断输入）。</summary>
+    private void RefreshProcessPicker()
+    {
+        var names = ProcessFinder.ListRunning()
+            .Select(p => p.Name)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        if (ProcessPickerBox.ItemsSource is List<string> current
+            && current.Count == names.Count
+            && !current.Except(names, StringComparer.OrdinalIgnoreCase).Any())
+        {
+            return;
+        }
+
+        ProcessPickerBox.ItemsSource = names;
+    }
+
+    /// <summary>
+    /// 按进程添加一条路由：无音频会话的应用（winmm 类、尚未发声）也能由此选择输出设备。
+    /// 写入 RouteStore 后立即对运行中进程生效；未运行的由看门狗在会话出现后补设。
+    /// </summary>
+    private async void AddRouteByProcess_Click(object sender, RoutedEventArgs e)
+    {
+        string input = (ProcessPickerBox.Text ?? string.Empty).Trim();
+        if (input.Length == 0)
+        {
+            AppendLog("[路由] 请输入或选择进程名");
+            return;
+        }
+
+        // 解析成完整路径：运行中取第一个匹配；未运行则按字面建弱绑定
+        var running = ProcessFinder.Find(input);
+        string storeKey = running.Count > 0 ? RouteStore.ResolveProcessPath(running[0].Id) : input;
+        foreach (var p in running)
+        {
+            p.Dispose();
+        }
+
+        string deviceName = DeviceNaming.Bare(AddRouteDeviceBox.SelectedItem as string ?? string.Empty);
+        if (string.IsNullOrEmpty(deviceName))
+        {
+            AppendLog("[路由] 请选择目标输出设备");
+            return;
+        }
+
+        WasapiDevice device;
+        try
+        {
+            device = DeviceManager.ResolveDevice(deviceName);
+        }
+        catch (Exception ex)
+        {
+            AppendLog($"[路由] 设备解析失败：{ex.Message}");
+            return;
+        }
+
+        _host.Store.Upsert(new StoredRoute
+        {
+            ProcessPath = storeKey,
+            DeviceId = device.Id,
+            DeviceName = device.FriendlyName,
+            Mode = RoutingMode.Auto,
+            Volume = 1f,
+        });
+        AppendLog($"[路由] 已添加 {Path.GetFileName(storeKey)} → {device.FriendlyName}（auto）");
+
+        foreach (var p in ProcessFinder.Find(storeKey))
+        {
+            using (p)
+            {
+                var report = await _host.Coordinator.ApplyRouteAsync(
+                    new RoutingCommand(p.Id, storeKey, new AudioDeviceRef(device.FriendlyName, device.Id), 1f, false),
+                    RoutingMode.Auto);
+                AppendLog($"  应用 → PID {p.Id}：B2 {(report.EndpointApplied ? "✅" : "❌")} A {(report.LoopbackActive ? "✅" : "❌")}");
+            }
+        }
+
+        Refresh();
     }
 
     private void MenuRefresh_Click(object sender, RoutedEventArgs e) => Refresh();

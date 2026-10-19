@@ -130,18 +130,24 @@ public sealed class RoutingCoordinator : IDisposable
             };
         }
 
-        // P2 音量守护：B2 路径应用直接在目标设备出声，对其会话施加音量 / 静音
-        // （A 路径的音量在 LoopbackBackend 内设置渲染会话；此处对原会话无害——已被静音守护管理）
-        if ((endpointApplied || loopbackActive) && (command.Volume < 1f || command.Mute))
+        // P2 音量守护：把路由的音量 / 静音意图施加到目标设备上的应用会话。
+        // （A 路径另由 LoopbackBackend 设置渲染会话音量；此处作用于应用自身会话。）
+        // 必须无条件施加（含 volume=1.0 / mute=false）：旧实现用 Volume<1 作门槛，
+        // 用户把音量从 0.3 拉回 100% 时会话音量停在旧值——界面显示 100% 实际播 30%。
+        if (endpointApplied || loopbackActive)
         {
             try
             {
                 int affected = WasapiSessionSource.ApplySessionControl(
                     command.ProcessId,
-                    volume: command.Volume < 1f ? command.Volume : null,
-                    mute: command.Mute ? true : null,
+                    volume: command.Volume,
+                    mute: command.Mute,
                     deviceId: command.TargetDevice.DeviceId);
-                Log?.Invoke($"[音量守护] 首次施加：PID {command.ProcessId} vol {command.Volume:F2} → 命中 {affected} 个会话（目标设备 {command.TargetDevice.FriendlyName}）");
+                Log?.Invoke($"[音量守护] 施加：PID {command.ProcessId} vol {command.Volume:F2} mute {command.Mute} → 命中 {affected} 个会话（目标设备 {command.TargetDevice.FriendlyName}）");
+                if (affected == 0)
+                {
+                    Log?.Invoke($"[音量守护] PID {command.ProcessId} 未命中会话——应用尚未在目标设备创建音频会话（或属 winmm 等不可枚举类型）。看门狗每 2s 重试；需立即生效可把该应用手段改为 A（音量由我们的渲染会话控制，不依赖应用会话）。");
+                }
             }
             catch
             {
