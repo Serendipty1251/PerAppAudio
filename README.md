@@ -2,10 +2,11 @@
 
 让 Windows 上每个应用程序独立选择音频输出设备的开源工具——打破"所有声音只有一个默认输出"的系统限制。
 
-- 状态：**成品可交付**（2026-10-18；托盘壳 + 常驻协调 + 热键/OSD/托盘面板/设备事件触发上线，单文件 exe 已发布至 `dist/PerAppAudio/`）
+- **主功能**：让不同的音源（应用程序）各自选择不同的输出设备——打开就看到正在发声的应用，选个设备立即改道，重启后依然保持
+- 状态：**成品可交付**（2026-10-19；托盘壳 + 常驻协调 + 设备事件触发 + 单文件 exe 已发布）
 - 仓库：https://github.com/Serendipty1251/PerAppAudio
-- 平台：Windows 10 2004+ / 11（首版唯一平台；Linux / macOS 远期）
-- **下载**：[GitHub Releases → v0.4.0](https://github.com/Serendipty1251/PerAppAudio/releases/tag/v0.4.0)（`PerAppAudio.exe` 单文件，免安装）
+- 平台：Windows 10 2004+ / 11（首版唯一平台）
+- **下载**：[GitHub Releases → v0.6.1](https://github.com/Serendipty1251/PerAppAudio/releases/tag/v0.6.1)（`PerAppAudio.exe` 单文件，免安装）
 - 协议：MIT
 - 隐私：纯本地运行，零网络请求，无遥测
 
@@ -91,7 +92,7 @@ dotnet run --project src/App.Cli -- test                                  # COM 
 3. **IsSystemSoundsSession 签名**：Win11 26200 实测带 `BOOL*` 出参（无参调用直接 AV），已按实测修正 COM 声明。
 4. **VoiceMeeter 设备 loopback 限制**：不镜像外来渲染流——`devlisten` 不能作为 A 链路在虚拟设备上的验收手段（音频确实已写入：实测 96 万帧、实时率 100.1%）。
 
-P2 剩余：B2 路径音量替代方案、设备插拔实测（WPF 壳与单文件发布已完成，见下）。
+P2 剩余（v2.0 主功能强化项）：B2 路径音量替代方案（winmm 会话枚举盲区）、规则 DSL 缺口（通配符 / 设备别名 / `default_mode`）、设备插拔物理实测。规划见 [per-app-audio-router-plan.md](per-app-audio-router-plan.md) §0。
 
 ## 成品使用（WPF 托盘壳 + 单文件 exe）
 
@@ -142,7 +143,7 @@ src/
 │                      # + RoutingCoordinator（P1 策略调度：Auto 双管齐下 + 看门狗）
 ├── SessionManager/    # 会话枚举、进程识别、音量守护（含 GetSessionVolumeStates 诊断）
 ├── RuleEngine/        # RuleSet（rules.yaml 解析）+ ProfileService + RouteStore + ProcessFinder
-├── App.Wpf/           # 托盘与主界面（调用层，P2 待建）
+├── App.Wpf/           # 托盘与主界面（调用层，主功能操作台）
 └── App.Cli/           # CLI / 诊断（ctl + profile + sessionvol/sessiondump）
 ```
 
