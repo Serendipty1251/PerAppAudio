@@ -32,7 +32,16 @@ public static class DeviceNaming
         foreach (var group in visible.GroupBy(d => d.FriendlyName, StringComparer.OrdinalIgnoreCase))
         {
             bool duplicated = group.Count() > 1;
-            foreach (var device in group)
+
+            // 组内顺序必须确定：COM 枚举顺序会抖动，若直接按枚举顺序取「第一个」，
+            // 裸名 → 展示名 的映射会在两次刷新间跳变，下拉框选中项跟着闪。
+            // 规则：优先 Active 端点，其次按 ID 升序——两者都与枚举顺序无关。
+            var ordered = group
+                .OrderByDescending(d => d.State == DeviceState.Active)
+                .ThenBy(d => d.Id, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            foreach (var device in ordered)
             {
                 // 同名设备追加 ID 尾段，保证每个设备的展示名唯一。
                 // 旧实现用「裸名 → 展示名」建表，同名设备会互相覆盖成同一条，进而导致下拉框出现重复条目。
