@@ -121,14 +121,21 @@ public partial class MainWindow : Window
         var visible = online.Concat(offlineTargets).ToList();
         DeviceNaming.Refresh(visible);
 
-        var names = visible.Select(d => DeviceNaming.Display(d.FriendlyName)).ToList();
+        // 每个设备一条展示名（同名设备带 ID 尾段去歧义）并去重。
+        // 旧实现按裸名查 Display：两个同名设备会得到同一条展示名，叠加下面的增量添加，
+        // 就会在下拉框里出现两条一模一样的条目，而且之后再也不会被清掉。
+        var names = visible.Select(d => DeviceNaming.Display(d)).Distinct(StringComparer.Ordinal).ToList();
         var bareNames = visible.Select(d => d.FriendlyName).ToList();
 
         // 集合比较（忽略顺序）：COM 设备枚举顺序可能抖动，顺序敏感比较会误判「有变化」，
         // 导致每次刷新都重建列表。仅顺序不同时直接返回，不碰集合。
-        var current = Devices.ToList();
-        bool sameSet = current.Count == names.Count
-            && !names.Except(current, StringComparer.Ordinal).Any();
+        // 同时要求「当前无重复条目」：旧缺陷可能已留下重复项，此时条数可能巧合地与目标相等，
+        // 若直接返回就永远没机会去重。
+        var target = new HashSet<string>(names, StringComparer.Ordinal);
+        var currentSet = new HashSet<string>(Devices, StringComparer.Ordinal);
+        bool sameSet = Devices.Count == currentSet.Count
+            && currentSet.Count == target.Count
+            && currentSet.SetEquals(target);
         if (sameSet)
         {
             return;
@@ -137,11 +144,23 @@ public partial class MainWindow : Window
         // 增量更新：只删消失项、追加新增项，绝不 Clear()。
         // WPF 对「未选中项」的增删不会关闭已打开的下拉弹窗；而 Clear() 会瞬间清空
         // 打开中的下拉框——这就是「未选择时选项消失」的直接根因。
-        foreach (var gone in current.Where(n => !names.Contains(n, StringComparer.Ordinal)).ToList())
+        foreach (var gone in Devices.Where(n => !target.Contains(n)).ToList())
         {
             Devices.Remove(gone);
         }
-        foreach (var add in names.Where(n => !current.Contains(n, StringComparer.Ordinal)))
+
+        // 历史遗留的重复条目也要清掉：集合语义表达不了「重复」，旧实现缺陷可能已留下重复项，
+        // 而重复项本身就在 target 里，上面的 gone 过滤不会移除它。
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var dup in Devices.Where(n => !seen.Add(n)).ToList())
+        {
+            Devices.Remove(dup);
+        }
+
+        // present 随添加实时更新：旧实现用「添加前」的快照做 Contains 判断，
+        // 当 names 含重复项时会把同一个字符串 Add 两次，形成重复条目。
+        var present = new HashSet<string>(Devices, StringComparer.Ordinal);
+        foreach (var add in names.Where(n => present.Add(n)))
         {
             Devices.Add(add);
         }
