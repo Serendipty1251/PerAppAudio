@@ -1,6 +1,9 @@
 ﻿using System.IO;
+using System.Runtime.InteropServices;
 using System.Windows;
+using System.Windows.Interop;
 using System.Windows.Threading;
+using Microsoft.Win32;
 using PerAppAudio.RuleEngine;
 using PerAppAudio.SessionManager;
 using WinForms = System.Windows.Forms;
@@ -144,6 +147,47 @@ public partial class App : System.Windows.Application
         }
 
         _ = _host.StartAsync();
+
+        // 睡眠/唤醒：唤醒后重建音频路由（睡眠会静默杀死 WASAPI 链路，且看门狗不会自愈）
+        SystemEvents.PowerModeChanged += OnPowerModeChanged;
+    }
+
+    // ---- 睡眠 / 唤醒 ----
+    // 睡眠会让 WASAPI 采集/渲染客户端失效：A 链路实际已死，但看门狗的
+    // 「进程存活 + 设备存在」检查都不会触发（_live 仍标记 LoopbackActive=true）
+    // → 路由静默失效且永不自愈。唤醒后延迟几秒（等设备/会话重新就绢）显式重建。
+    private void OnPowerModeChanged(object sender, PowerModeChangedEventArgs e)
+    {
+        if (e.Mode != PowerModes.Resume || _host is null)
+        {
+            return;
+        }
+
+        AppendFileLog("[电源] 系统唤醒 → 3 秒后重建全部音频路由");
+        Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(() =>
+        {
+            var timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(3) };
+            timer.Tick += (_, _) =>
+            {
+                timer.Stop();
+                _ = RebuildRoutesAfterResumeAsync();
+            };
+            timer.Start();
+        }));
+    }
+
+    private async Task RebuildRoutesAfterResumeAsync()
+    {
+        try
+        {
+            int n = await _host!.RebuildAllRoutesAsync();
+            _window?.AppendLog($"[电源] 唤醒后已重建 {n} 条音频路由");
+            AppendFileLog($"[电源] 唤醒后已重建 {n} 条音频路由");
+        }
+        catch (Exception ex)
+        {
+            AppendFileLog($"[电源] 唤醒后重建路由失败: {ex.Message}");
+        }
     }
 
     public void ShowMainWindow() => _window?.ShowFromTray();
@@ -164,7 +208,14 @@ public partial class App : System.Windows.Application
         exitItem.Click += (_, _) => ExitApplication();
         _trayMenu.Items.Add(exitItem);
 
-        _tray = new WinForms.NotifyIcon
+        _tray = CreateTrayIcon();
+        HookTaskbarCreated();
+    }
+
+    /// <summary>创建托盘图标（独立成方法：资源管理器重启后需要重建）。</summary>
+    private WinForms.NotifyIcon CreateTrayIcon()
+    {
+        var icon = new WinForms.NotifyIcon
         {
             Icon = LoadAppIcon(),
             Text = L10n.Get("TrayTooltip"),
@@ -172,15 +223,73 @@ public partial class App : System.Windows.Application
             ContextMenuStrip = _trayMenu,
         };
         // 左键单击：弹出快捷面板（正在播放/场景/退出）；双击仍走主窗口
-        _tray.MouseClick += (_, e) =>
+        icon.MouseClick += (_, e) =>
         {
             if (e.Button == WinForms.MouseButtons.Left)
             {
                 TrayFlyoutWindow.ShowAtTray();
             }
         };
-        _tray.DoubleClick += (_, _) => ShowMainWindow();
+        icon.DoubleClick += (_, _) => ShowMainWindow();
+        return icon;
     }
+
+    /// <summary>
+    /// 监听 TaskbarCreated 注册消息：资源管理器重启后托盘图标会消失（进程还活着），
+    /// 收到即重建。这是 WPF/WinForms 托盘程序的必做项，否则用户只能杀进程重启。
+    /// </summary>
+    private void HookTaskbarCreated()
+    {
+        if (_window is null)
+        {
+            return;
+        }
+
+        uint taskbarCreated = RegisterWindowMessage("TaskbarCreated");
+
+        void Attach()
+        {
+            if (PresentationSource.FromVisual(_window) is HwndSource source)
+            {
+                source.AddHook((IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled) =>
+                {
+                    if (msg == (int)taskbarCreated)
+                    {
+                        RebuildTrayIcon();
+                    }
+                    return IntPtr.Zero;
+                });
+            }
+        }
+
+        if (PresentationSource.FromVisual(_window) is not null)
+        {
+            Attach();
+        }
+        else
+        {
+            _window.SourceInitialized += (_, _) => Attach();
+        }
+    }
+
+    /// <summary>重建托盘图标（先建后删，避免中途没有图标）。</summary>
+    private void RebuildTrayIcon()
+    {
+        try
+        {
+            AppendFileLog("[托盘] 检测到资源管理器重启 → 重建托盘图标");
+            var old = _tray;
+            _tray = CreateTrayIcon();
+            old?.Dispose();
+        }
+        catch (Exception ex)
+        {
+            AppendFileLog($"[托盘] 重建图标失败: {ex.Message}");
+        }
+    }
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern uint RegisterWindowMessage(string lpString);
 
     private static void ReportCrash(string title, Exception ex)
     {
@@ -261,6 +370,7 @@ public partial class App : System.Windows.Application
 
     protected override void OnExit(ExitEventArgs e)
     {
+        SystemEvents.PowerModeChanged -= OnPowerModeChanged;
         _tray?.Dispose();
         _trayMenu?.Dispose();
         _host?.Dispose();

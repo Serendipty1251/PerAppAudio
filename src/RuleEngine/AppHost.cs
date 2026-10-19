@@ -128,6 +128,10 @@ public sealed class AppHost : IDisposable
         }
     }
 
+    /// <summary>重建全部路由（睡眠唤醒后调用）；实现见 RouteRebuilder。</summary>
+    public Task<int> RebuildAllRoutesAsync(CancellationToken ct = default)
+        => RouteRebuilder.RebuildAllAsync(_coordinator, _store, Log, ct);
+
     /// <summary>路由集合签名（持久路由 + 活动链路的关键字段拼接）。</summary>
     private string BuildRoutesSignature()
     {

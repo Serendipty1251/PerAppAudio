@@ -111,6 +111,7 @@ dotnet publish src/App.Cli -c Release -r win-x64 --self-contained true \
   - 「设置」：开机自启 / OSD / 刷新策略 / 6 个全局热键配置 / 中英文界面切换；
   - 关窗即最小化到托盘；**左键托盘图标**（或 Ctrl+Alt+F）弹出快捷面板（会话快切 / 场景 / 退出）。
 - 诊断 `PerAppAudio.Cli.exe`：devices / sessions / sessionvol / mic / **proc** / ctl / profile 全套命令。
+  其中 `ctl rebuild` 可手动全量重建路由（睡眠唤醒后的恢复入口）。
 - 数据在 `%APPDATA%\PerAppAudio\`（routes.json / rules.yaml / ui.json / app.log）。
 
 ## 会话枚举修复（2026-10-16 晚间，重要技术决策）

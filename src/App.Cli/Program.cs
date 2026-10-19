@@ -96,6 +96,7 @@ internal static class Program
              ctl remove --pid <PID>       拆除路由 + 清 B2 覆盖 + 删持久记录
              ctl list                     查看持久路由表与运行中匹配进程
              ctl watch [--interval ms]    常驻协调：看门狗 + 新进程自动应用路由（Ctrl+C 退出）
+             ctl rebuild               全量重建路由（睡眠唤醒后手动恢复；拆旧链路后按路由表重建）
 
              profile list                        列出 rules.yaml 中的场景
              profile apply --name <名> [--replace] [--dry-run]
@@ -730,6 +731,16 @@ internal static class Program
 
             case "watch":
                 return CtlWatch(store, args);
+
+            case "rebuild":
+            {
+                // 全量重建：先拆所有 A 链路再按路由表重建（睡眠唤醒后的手动恢复入口）
+                using var coordinator = new RoutingCoordinator();
+                int n = RouteRebuilder.RebuildAllAsync(coordinator, store, m => Console.WriteLine(m))
+                    .GetAwaiter().GetResult();
+                Console.WriteLine($"[rebuild] 完成，重新应用 {n} 条路由");
+                return 0;
+            }
 
             default:
                 Console.Error.WriteLine($"未知子命令: {sub}（add / remove / list / watch）");
