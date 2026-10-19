@@ -306,14 +306,17 @@ internal static class Program
         Console.WriteLine($"播放: {freq}Hz 正弦 → {device.FriendlyName}（{DeviceManager.DescribeFormat(format)}，缓冲 {renderer.BufferFrames} 帧，{ms} ms）");
         Console.WriteLine($"[渲染器] 本进程 PID {Environment.ProcessId}——会话枚举应能看到此会话（实验目标）");
 
-        bool isFloat = format.wFormatTag == 3;
-        int bytesPerSample = format.wBitsPerSample / 8;
+        // 必须用渲染器暴露的 IsFloatFormat/BytesPerSample：设备 Mix 格式通常是
+        // WAVEFORMATEXTENSIBLE + 浮点子格式，旧写法 wFormatTag==3 会把它当成整型，
+        // 导致 (int)0.25 恒为 0 ——整段音频写成静音（实测验证：devlisten 读到 RMS 0.000065）。
+        bool isFloat = renderer.IsFloatFormat;
+        int bytesPerSample = renderer.BytesPerSample;
         int channels = format.nChannels;
         int sampleRate = (int)format.nSamplesPerSec;
         int framesPerPeriod = sampleRate * 10 / 1000;
         int bytesPerPeriod = framesPerPeriod * channels * bytesPerSample;
 
-        double amplitude = isFloat ? 0.25 : (1 << (format.wBitsPerSample - 2));
+        double amplitude = isFloat ? 0.25 : (1L << (format.wBitsPerSample - 2));
 
         var sw = Stopwatch.StartNew();
         long framesWritten = 0;
@@ -353,7 +356,9 @@ internal static class Program
             {
                 Marshal.FreeHGlobal(ptr);
             }
-            Thread.Sleep(10);
+            // 事件驱动等待（不用 Thread.Sleep）：Sleep(10) 在 Windows 上实际精度约 15.6ms，
+            // 会因产生速度低于消费速度而制造渲染器缺异（实测实时率只有 64%，音频带间隙）。
+            renderer.WaitForPacket(10);
         }
 
         Console.WriteLine($"[完成] 写入 {framesWritten} 帧（实时率 {(framesWritten / (double)sampleRate) / (ms / 1000.0) * 100:F1}%）");
