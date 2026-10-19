@@ -116,7 +116,9 @@ internal static class Program
     private static int Unknown(string cmd)
     {
         Console.Error.WriteLine($"未知命令: {cmd}");
-        return Usage();
+        Console.Error.WriteLine();
+        Usage();
+        return 2;
     }
 
     /// <summary>设备级 Loopback 探针：监听指定设备正在播放的音频能量（验证音频迁移用）。</summary>
@@ -182,7 +184,8 @@ internal static class Program
                 var route = backend.GetPersistedEndpoint(pid);
                 if (route is null)
                 {
-                    Console.WriteLine("[读回] 失败（手段B2 不可用）");
+                    // 与「工厂不可用」区分：探测可用但读回为空，通常是进程未注册音频会话
+                    Console.WriteLine("[读回] 失败（进程未注册音频会话，或手段B2 不可用）");
                     return 1;
                 }
                 Console.WriteLine($"[读回] {(route.Length == 0 ? "(跟随系统默认)" : route)}");

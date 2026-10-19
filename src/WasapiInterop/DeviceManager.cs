@@ -141,6 +141,13 @@ public static class DeviceManager
     /// <summary>按 ID 或友好名（精确 → 不区分大小写子串）解析设备。</summary>
     public static WasapiDevice ResolveDevice(string idOrName)
     {
+        // 空串 / 纯空白必须拒绝：子串兜底 Contains("") 恒为真，会静默命中列表第一个设备，
+        // 导致「--to 空串」把音频莫名送到一个意外设备（极限测试实测发现）。
+        if (string.IsNullOrWhiteSpace(idOrName))
+        {
+            throw new InvalidOperationException("设备名不能为空（请传设备 ID 或友好名）");
+        }
+
         var devices = EnumerateRenderDevices();
         var exact = devices.FirstOrDefault(d => string.Equals(d.Id, idOrName, StringComparison.OrdinalIgnoreCase));
         if (exact is not null) return exact;
@@ -148,7 +155,11 @@ public static class DeviceManager
         var byFriendly = devices.FirstOrDefault(d => string.Equals(d.FriendlyName, idOrName, StringComparison.OrdinalIgnoreCase));
         if (byFriendly is not null) return byFriendly;
 
-        var byContains = devices.FirstOrDefault(d => d.FriendlyName.Contains(idOrName, StringComparison.OrdinalIgnoreCase));
+        // 子串兜底至少 2 个字符，避免单字符误配
+        string needle = idOrName.Trim();
+        var byContains = needle.Length >= 2
+            ? devices.FirstOrDefault(d => d.FriendlyName.Contains(needle, StringComparison.OrdinalIgnoreCase))
+            : null;
         if (byContains is not null) return byContains;
 
         throw new InvalidOperationException($"找不到设备：{idOrName}");

@@ -243,7 +243,10 @@ public partial class MainWindow : Window
         var live = _host.Coordinator.GetLiveRoutes();
 
         // 路由表 → 行（保留已有行的输入状态，仅更新数据）
-        var rowsByPath = _rows.ToDictionary(r => r.Route.ProcessPath, StringComparer.OrdinalIgnoreCase);
+        // 容错形式：假如仍然出现重复路径（并发写入等），ToDictionary 会抛异常崩溃整个刷新
+        var rowsByPath = _rows
+            .GroupBy(r => r.Route.ProcessPath, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         foreach (var stored in _host.Store.Routes)
@@ -375,13 +378,42 @@ public partial class MainWindow : Window
     }
 
     /// <summary>行改动立即对运行中匹配进程生效（异步，不阻塞 UI 线程）。</summary>
+    /// <summary>
+    /// 解析设备名；失败时记日志并返回 false（不向上抛）。
+    /// 设备可能在下拉刷新间隙消失，或历史数据里存的是去疙义展示名（带 # 尾段）——
+    /// 直接抛异常会突破到 DispatcherUnhandledException（GUI 启动测试在 app.log 里实测到过）。
+    /// </summary>
+    private bool TryResolveDevice(string? name, out WasapiDevice? device)
+    {
+        device = null;
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            AppendLog("[设备] 未选择输出设备");
+            return false;
+        }
+
+        try
+        {
+            device = DeviceManager.ResolveDevice(DeviceNaming.Bare(name));
+            return true;
+        }
+        catch (Exception ex)
+        {
+            AppendLog($"[设备] 解析失败「{name}」：{ex.Message}");
+            return false;
+        }
+    }
+
     private async Task ApplyToRunning(RouteRow row)
     {
         foreach (var process in ProcessFinder.Find(row.Route.ProcessPath))
         {
             using (process)
             {
-                var device = DeviceManager.ResolveDevice(row.Route.DeviceName);
+                if (!TryResolveDevice(row.Route.DeviceName, out var device) || device is null)
+                {
+                    continue;
+                }
                 var command = new RoutingCommand(
                     process.Id,
                     RouteStore.ResolveProcessPath(process.Id),
@@ -399,13 +431,25 @@ public partial class MainWindow : Window
     private async void Device_Changed(object sender, SelectionChangedEventArgs e)
     {
         var row = RowFromSender(sender);
-        if (row is null || row.Route.DeviceName == (sender as ComboBox)?.SelectedItem as string)
+        if (row is null)
         {
             return;
         }
 
-        row.Route.DeviceName = (string)((ComboBox)sender).SelectedItem;
-        var device = DeviceManager.ResolveDevice(row.Route.DeviceName);
+        // 下拉里是去疙义展示名（同名设备带 # 尾段）；必须存装孙名，
+        // 否则后续 ResolveDevice(展示名) 必失败（app.log 实测过该异常）。
+        string selected = ((ComboBox)sender).SelectedItem as string ?? string.Empty;
+        string bare = DeviceNaming.Bare(selected);
+        if (string.Equals(row.Route.DeviceName, bare, StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        row.Route.DeviceName = bare;
+        if (!TryResolveDevice(bare, out var device) || device is null)
+        {
+            return;
+        }
         row.Route.DeviceId = device.Id;
         await PersistRow(row);
     }
@@ -495,7 +539,10 @@ public partial class MainWindow : Window
             return;
         }
 
-        var device = DeviceManager.ResolveDevice(row.DeviceName);
+        if (!TryResolveDevice(row.DeviceName, out var device) || device is null)
+        {
+            return;
+        }
         string processPath = RouteStore.ResolveProcessPath(row.ProcessId);
 
         _host.Store.Upsert(new StoredRoute
@@ -920,7 +967,10 @@ public partial class MainWindow : Window
             {
                 using (process)
                 {
-                    var device = DeviceManager.ResolveDevice(stored.DeviceName);
+                    if (!TryResolveDevice(stored.DeviceName, out var device) || device is null)
+                    {
+                        continue;
+                    }
                     var command = new RoutingCommand(process.Id, stored.ProcessPath,
                         new AudioDeviceRef(device.FriendlyName, device.Id), stored.Volume, stored.Mute);
                     var report = await _host.Coordinator.ApplyRouteAsync(command, stored.Mode);

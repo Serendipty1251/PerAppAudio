@@ -80,6 +80,13 @@ public sealed class RouteStore
 
             var json = File.ReadAllText(_path);
             _routes = JsonSerializer.Deserialize<List<StoredRoute>>(json, JsonOptions) ?? new List<StoredRoute>();
+
+            // 手工编辑过的文件可能出现重复路径（大小写差异等）：按 Upsert 的「后者覆盖」语义去重，
+            // 否则 UI 侧按路径建字典会抛「已存在相同键」（极限测试推演出的崩溃路径）。
+            _routes = _routes
+                .GroupBy(r => r.ProcessPath, StringComparer.OrdinalIgnoreCase)
+                .Select(g => g.Last())
+                .ToList();
             return this;
         }
     }
