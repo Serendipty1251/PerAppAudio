@@ -8,8 +8,11 @@ namespace PerAppAudio.RoutingEngine.Backends;
 
 /// <summary>
 /// 手段A：进程 Loopback 重定向后端（PoC-1 实现）。
-/// 链路：目标进程音频 → 进程级 Loopback 捕获 →（零转换直通）→ 目标设备渲染；
-/// 同时在原设备上静音该进程的音频会话，杜绝双重播放（500ms 守护重静音）。
+/// 链路：目标进程音频 → 进程级 Loopback 捕获 →（零转换直通）→ 目标设备渲染。
+/// 无霁静音守护：进程 loopback Include 模式激活即抑制目标进程的原渲染（PoC-1 实测）。
+/// 旧版的 500ms 静音守护已删除：它不防任何东西，只会在混合器里留下静音图标、
+/// 并在退出拆链不完整时残留永久静音（2026-10-20 实测发现）；且它静音所有设备上的会话，
+/// Auto 模式下 B2 直播的音也会被自家守护误杀。
 /// </summary>
 public sealed class LoopbackBackend : IRoutingBackend
 {
@@ -18,7 +21,6 @@ public sealed class LoopbackBackend : IRoutingBackend
         public required ProcessLoopbackCapture Capture { get; init; }
         public required WasapiRenderer Renderer { get; init; }
         public required RedirectStats Stats { get; init; }
-        public required Timer MuteGuard { get; init; }
         public required int ProcessId { get; init; }
     }
 
@@ -52,7 +54,6 @@ public sealed class LoopbackBackend : IRoutingBackend
         IntPtr mixFormatPtr = IntPtr.Zero;
         ProcessLoopbackCapture? capture = null;
         WasapiRenderer? renderer = null;
-        Timer? muteGuard = null;
         string stage = "初始化";
 
         try
@@ -80,26 +81,11 @@ public sealed class LoopbackBackend : IRoutingBackend
             stage = $"启动渲染器（设备 {command.TargetDevice.FriendlyName}，格式 {formatDesc}）";
             renderer = WasapiRenderer.Start(command.TargetDevice.DeviceId, bufferMilliseconds: 10);
 
-            // 4. 静音守护：每 500ms 把该进程在源设备上的会话重新静音
-            int pid = command.ProcessId;
-            muteGuard = new Timer(_ =>
-            {
-                try
-                {
-                    WasapiSessionSource.MuteProcessSessions(pid, mute: true);
-                }
-                catch
-                {
-                    // 守护失败不致命：主链路仍在
-                }
-            }, null, TimeSpan.Zero, TimeSpan.FromMilliseconds(500));
-
             var route = new ActiveRoute
             {
                 Capture = capture,
                 Renderer = renderer,
                 Stats = stats,
-                MuteGuard = muteGuard,
                 ProcessId = command.ProcessId,
             };
 
@@ -107,9 +93,6 @@ public sealed class LoopbackBackend : IRoutingBackend
             {
                 _routes[command.ProcessId] = route;
             }
-
-            // 首轮立即静音，避免启动瞬间的双重播放
-            WasapiSessionSource.MuteProcessSessions(pid, mute: true);
 
             // P2 音量守护：渲染会话音量（手段A 的目标设备独立音量）。
             // 必须无条件设置（含 1.0）：旧实现 Volume<1 作门槛，
@@ -137,7 +120,6 @@ public sealed class LoopbackBackend : IRoutingBackend
         }
         catch (Exception ex)
         {
-            muteGuard?.Dispose();
             renderer?.Dispose();
             capture?.Dispose();
             return RoutingResult.Fail($"手段A 启动失败于「{stage}」: 0x{ex.HResult:X8} {ex.Message}");
@@ -188,20 +170,11 @@ public sealed class LoopbackBackend : IRoutingBackend
 
         // 锁外释放：Capture.Dispose() 会 Join 采集线程，而该线程的 OnPacket 回调需要拿 _gate，
         // 持锁 Dispose 会让两者互相等待（Join 超时最多卡 2 秒，表现为拆除路由时界面卡顿）。
-        route.MuteGuard.Dispose();
         route.Capture.Dispose(); // 先停采集：返回后不会再有 OnPacket 进入
         route.Renderer.Dispose();
 
-        // 恢复原会话声音
-        try
-        {
-            WasapiSessionSource.MuteProcessSessions(command.ProcessId, mute: false);
-        }
-        catch
-        {
-        }
-
-        return ValueTask.FromResult(RoutingResult.Ok(RoutingMode.Loopback) with { Message = "路由已拆除，原会话已恢复" });
+        // 拆除后 loopback 抑制自动解除，原渲染恢复（无需手工恢复静音）
+        return ValueTask.FromResult(RoutingResult.Ok(RoutingMode.Loopback) with { Message = "路由已拆除，原渲染自动恢复" });
     }
 
     /// <summary>PoC-1 报告用：取某进程的统计快照。</summary>
