@@ -27,6 +27,13 @@ public sealed class AppSettings
     public string Language { get; set; } = "zh-CN";
     public string Theme { get; set; } = "Light";
 
+    /// <summary>
+    /// 退出回退：关闭程序时把所有被路由应用的输出还原为系统默认
+    /// （拆 A 链路 + 清 B2 注册表覆盖）。默认开。
+    /// 关闭后退出保留 B2 持久化（应用重启后仍按路由走，重启 PerAppAudio 再接管）。
+    /// </summary>
+    public bool RestoreOnExit { get; set; } = true;
+
     // ---- 全局热键（空字符串 = 禁用该热键）----
     public string HotkeyNextOutput { get; set; } = "Ctrl+Alt+Right";
     public string HotkeyVolumeUp { get; set; } = "Ctrl+Alt+Up";

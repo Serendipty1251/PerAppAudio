@@ -128,6 +128,55 @@ public sealed class AppHost : IDisposable
         }
     }
 
+    /// <summary>
+    /// 退出回退：把所有活动路由还原为系统默认——
+    /// 拆全部 A 链路（原渲染自动恢复）+ 清全部 B2 注册表覆盖（应用重建音频会话后跟随系统默认）。
+    /// 不删路由表（routes.json 保留，下次启动恢复接管）。
+    /// 返回还原的进程数。
+    /// </summary>
+    public async Task<int> RestoreAllRoutesAsync(CancellationToken ct = default)
+    {
+        var live = _coordinator.GetLiveRoutes();
+
+        // 注意不能只拆 _live 里的：B2 覆盖写在系统注册表，可能留有历史进程（已退出的会被 E_INVALIDARG 拒绝，容错）。
+        // 按路由表全量清除（进程死活都尝试）；同时拆 _live 的 A 链路。
+        int restored = 0;
+        foreach (var l in live)
+        {
+            try
+            {
+                await _coordinator.RemoveRouteAsync(l.ProcessId, clearEndpoint: true, ct).ConfigureAwait(false);
+                restored++;
+            }
+            catch (Exception ex)
+            {
+                Log?.Invoke($"[回退] 拆除 PID {l.ProcessId} 失败: {ex.Message}");
+            }
+        }
+
+        foreach (var route in _store.Routes)
+        {
+            try
+            {
+                foreach (var process in ProcessFinder.Find(route.ProcessPath))
+                {
+                    using (process)
+                    {
+                        // 清 B2 覆盖（空串 = 跟随系统默认）；对已拆过的进程也要清（它们的注册表覆盖仍在）
+                        await _coordinator.RemoveRouteAsync(process.Id, clearEndpoint: true, ct).ConfigureAwait(false);
+                    }
+                }
+            }
+            catch
+            {
+                // 单个路由清理失败不影响其余
+            }
+        }
+
+        Log?.Invoke($"[回退] 已还原 {restored} 条活动路由（A 拆除 + B2 清除）；路由表保留（下次启动接管）");
+        return restored;
+    }
+
     /// <summary>重建全部路由（睡眠唤醒后调用）；实现见 RouteRebuilder。</summary>
     public Task<int> RebuildAllRoutesAsync(CancellationToken ct = default)
         => RouteRebuilder.RebuildAllAsync(_coordinator, _store, Log, ct);

@@ -150,6 +150,20 @@ public partial class App : System.Windows.Application
 
         // 睡眠/唤醒：唤醒后重建音频路由（睡眠会静默杀死 WASAPI 链路，且看门狗不会自愈）
         SystemEvents.PowerModeChanged += OnPowerModeChanged;
+
+        // 自测模式：沙箱禁合成键鼠事件，无法点托盘「退出」——
+        // 用环境变量触发 ExitApplication（含退出回退），验证回退功能全链路。
+        if (Environment.GetEnvironmentVariable("PERAPPAUDIO_TEST_EXIT") == "1")
+        {
+            AppendFileLog("[自测] PERAPPAUDIO_TEST_EXIT=1：5 秒后触发退出（含回退）");
+            var exitTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(5) };
+            exitTimer.Tick += (_, _) =>
+            {
+                exitTimer.Stop();
+                ExitApplication();
+            };
+            exitTimer.Start();
+        }
     }
 
     // ---- 睡眠 / 唤醒 ----
@@ -364,6 +378,21 @@ public partial class App : System.Windows.Application
 
     public void ExitApplication()
     {
+        // 退出回退：把被路由应用的输出还原为系统默认（默认开，设置页可关）。
+        // 必须在 Shutdown 前同步执行完毕：OnExit 里的 _host.Dispose() 只拆 A 不清 B2（源代码有意保留持久化）。
+        if (Settings.RestoreOnExit && _host is not null)
+        {
+            try
+            {
+                int n = _host.RestoreAllRoutesAsync().GetAwaiter().GetResult();
+                _window?.AppendLog($"[回退] 已还原 {n} 条路由→系统默认");
+            }
+            catch (Exception ex)
+            {
+                AppendFileLog($"[回退] 还原失败: {ex.Message}");
+            }
+        }
+
         _window?.AllowClose();
         Shutdown();
     }

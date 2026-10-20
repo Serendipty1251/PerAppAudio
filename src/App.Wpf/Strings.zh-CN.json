@@ -154,5 +154,7 @@
   "ColAddProcess": "音源进程",
   "ColAddDevice": "输出设备",
   "BtnAddRoute": "添加路由",
-  "TipProcessPicker": "输入或选择进程名；无音频会话的应用（如 winmm 类）也能在此添加"
+  "TipProcessPicker": "输入或选择进程名；无音频会话的应用（如 winmm 类）也能在此添加",
+  "CheckRestoreOnExit": "退出时恢复系统默认输出（拆路由+清持久化；关闭则保留路甴）",
+  "TipRestoreOnExit": "开启：退出后所有应用回到系统默认输出，路由表保留（下次启动自动接管）；关闭：保留持久化路甴，应用重启后仍按路由走"
 }

@@ -897,6 +897,18 @@ public partial class MainWindow : Window
         Refresh();
     }
 
+    /// <summary>退出回退开关：只落设置，退出时由 App.ExitApplication 执行。</summary>
+    private void RestoreOnExit_Changed(object sender, RoutedEventArgs e)
+    {
+        if (_loadingSettings)
+        {
+            return;
+        }
+        _settings.RestoreOnExit = RestoreOnExitCheck.IsChecked == true;
+        _settings.Save();
+        AppendLog($"[设置] 退出回退 = {(_settings.RestoreOnExit ? "开（还原系统默认）" : "关（保留持久化路甴）")}");
+    }
+
     private void MenuRefresh_Click(object sender, RoutedEventArgs e) => Refresh();
 
     private void MenuClearLog_Click(object sender, RoutedEventArgs e) => ClearLog_Click(sender, e);
@@ -1048,6 +1060,7 @@ public partial class MainWindow : Window
         {
             StartWithWindowsCheck.IsChecked = _settings.StartWithWindows;
             OsdEnabledCheck.IsChecked = _settings.OsdEnabled;
+            RestoreOnExitCheck.IsChecked = _settings.RestoreOnExit;
             DefaultAutoRefreshCheck.IsChecked = _settings.AutoRefresh;
             RefreshIntervalBox.SelectedIndex = _settings.RefreshSeconds switch
             {
@@ -1082,6 +1095,7 @@ public partial class MainWindow : Window
 
         _settings.StartWithWindows = StartWithWindowsCheck.IsChecked == true;
         _settings.OsdEnabled = OsdEnabledCheck.IsChecked == true;
+        _settings.RestoreOnExit = RestoreOnExitCheck.IsChecked == true;
         _settings.AutoRefresh = DefaultAutoRefreshCheck.IsChecked == true;
         _settings.RefreshSeconds = RefreshIntervalBox.SelectedIndex switch
         {

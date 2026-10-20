@@ -309,6 +309,9 @@
                                   Margin="0,2" Checked="SettingChanged" Unchecked="SettingChanged"/>
                         <CheckBox x:Name="OsdEnabledCheck" Content="{loc:Loc CheckOsd}"
                                   Margin="0,6,2,2" Checked="SettingChanged" Unchecked="SettingChanged"/>
+                        <CheckBox x:Name="RestoreOnExitCheck" Content="{loc:Loc CheckRestoreOnExit}"
+                                  Margin="0,6,2,2" Checked="RestoreOnExit_Changed" Unchecked="RestoreOnExit_Changed"
+                                  ToolTip="{loc:Loc TipRestoreOnExit}"/>
 
                         <Separator Margin="0,14"/>
                         <TextBlock Text="{loc:Loc SectionLanguage}" FontSize="14" FontWeight="SemiBold" Margin="0,4,0,8"/>

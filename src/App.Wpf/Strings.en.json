@@ -154,5 +154,7 @@
   "ColAddProcess": "Process",
   "ColAddDevice": "Output",
   "BtnAddRoute": "Add route",
-  "TipProcessPicker": "Type or pick a process name; apps without an audio session (e.g. winmm) can be added here too"
+  "TipProcessPicker": "Type or pick a process name; apps without an audio session (e.g. winmm) can be added here too",
+  "CheckRestoreOnExit": "Restore default output on exit (teardown + clear persisted)",
+  "TipRestoreOnExit": "On: all apps return to system default output; route table kept (auto re-applied next start). Off: persisted routes stay active after restart."
 }
