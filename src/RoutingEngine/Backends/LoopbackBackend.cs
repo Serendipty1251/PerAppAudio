@@ -111,9 +111,11 @@ public sealed class LoopbackBackend : IRoutingBackend
             // 首轮立即静音，避免启动瞬间的双重播放
             WasapiSessionSource.MuteProcessSessions(pid, mute: true);
 
-            // P2 音量守护：渲染会话音量（手段A 的目标设备独立音量）
+            // P2 音量守护：渲染会话音量（手段A 的目标设备独立音量）。
+            // 必须无条件设置（含 1.0）：旧实现 Volume<1 作门槛，
+            // 用户把音量从 0.3 拉回 100% 时渲染会话音量停在旧值。
             float? appliedVolume = null;
-            if (command.Volume is >= 0f and < 1f)
+            if (command.Volume >= 0f)
             {
                 try
                 {
@@ -218,6 +220,31 @@ public sealed class LoopbackBackend : IRoutingBackend
         lock (_gate)
         {
             return _routes.ContainsKey(processId);
+        }
+    }
+
+    /// <summary>
+    /// 更新活动路由的渲染会话音量（UI 音量滑条对已激活的 A 路由生效）。
+    /// 返回读回值；路由不存在返回 null。
+    /// </summary>
+    public float? UpdateVolume(int processId, float volume)
+    {
+        lock (_gate)
+        {
+            if (!_routes.TryGetValue(processId, out var route))
+            {
+                return null;
+            }
+
+            try
+            {
+                route.Renderer.SetSessionVolume(Math.Clamp(volume, 0f, 1f));
+                return route.Renderer.GetSessionVolume();
+            }
+            catch
+            {
+                return null;
+            }
         }
     }
 }

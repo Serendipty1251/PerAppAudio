@@ -103,7 +103,12 @@ public sealed class RoutingCoordinator : IDisposable
             else if (_loopback.IsRouting(command.ProcessId))
             {
                 loopbackActive = true;
-                loopbackMessage = "已有活动 A 路由，复用";
+                // 复用不等于不更新：A 路径的听感音量 = 我们的渲染会话音量，
+                // 路由创建后 UI 改音量靠这里下发（应用自身会话已被静音，走 ApplySessionControl 无效）。
+                float? readBack = _loopback.UpdateVolume(command.ProcessId, command.Volume);
+                loopbackMessage = readBack.HasValue
+                    ? $"已有活动 A 路由，已同步渲染会话音量→ {readBack.Value:F2}"
+                    : "已有活动 A 路由（音量同步失败）";
             }
             else
             {
@@ -120,14 +125,25 @@ public sealed class RoutingCoordinator : IDisposable
 
         lock (_gate)
         {
-            _live[command.ProcessId] = new LiveRoute
+            // 双失败不登记（旧实现无条件写入）：
+            // ScanAndApply 见 PID 在 _live 即跳过、看门狗对 !LoopbackActive 又 continue——
+            // 失败路由永不重试（且与日志「看门狗每 2s 重试」的承诺矛盾）。
+            // 不登记后下一轮扫描会重新尝试（进程仍匹配时）。
+            if (endpointApplied || loopbackActive)
             {
-                Command = command,
-                RequestedMode = mode,
-                EndpointApplied = endpointApplied,
-                LoopbackActive = loopbackActive,
-                AppliedAt = DateTime.Now,
-            };
+                _live[command.ProcessId] = new LiveRoute
+                {
+                    Command = command,
+                    RequestedMode = mode,
+                    EndpointApplied = endpointApplied,
+                    LoopbackActive = loopbackActive,
+                    AppliedAt = DateTime.Now,
+                };
+            }
+            else if (_live.Remove(command.ProcessId))
+            {
+                Log?.Invoke($"[调度] PID {command.ProcessId} 双失败不登记，下一轮扫描重试");
+            }
         }
 
         // P2 音量守护：把路由的音量 / 静音意图施加到目标设备上的应用会话。
@@ -287,13 +303,24 @@ public sealed class RoutingCoordinator : IDisposable
                     continue;
                 }
 
-                if (!route.LoopbackActive)
+                // 2. 目标设备消失 → 拆 A，标记等待回归（不论 LoopbackActive 当前值）
+                if (deviceIds.Contains(route.Command.TargetDevice.DeviceId))
                 {
-                    continue;
+                    // 3. 设备在线且此前被暂停 → 重挂 A。
+                    // 必须早于下面的 !LoopbackActive continue：旧顺序把重挂分支放在 continue 之后，
+                    // 而暂停时 LoopbackActive 已置 false，第一个 continue 就把它挡掉——重挂永远不可达（死代码）。
+                    if (route.AwaitingDevice)
+                    {
+                        Log?.Invoke($"[看门狗] 目标设备「{route.Command.TargetDevice.FriendlyName}」回归 → 重挂 A 路由（进程 {pid}）");
+                        var r = _loopback.ApplyAsync(route.Command).AsTask().GetAwaiter().GetResult();
+                        MarkLoopback(pid, active: r.Success, awaitingDevice: !r.Success);
+                        if (!r.Success)
+                        {
+                            Log?.Invoke($"[看门狗] 重挂失败: {r.Message}");
+                        }
+                    }
                 }
-
-                // 2. 目标设备消失 → 拆 A，标记等待回归
-                if (!deviceIds.Contains(route.Command.TargetDevice.DeviceId))
+                else
                 {
                     Log?.Invoke($"[看门狗] 目标设备「{route.Command.TargetDevice.FriendlyName}」消失 → 暂停 A 路由（进程 {pid}）");
                     _loopback.RemoveAsync(route.Command).AsTask().Wait(TimeSpan.FromSeconds(3));
@@ -301,16 +328,9 @@ public sealed class RoutingCoordinator : IDisposable
                     continue;
                 }
 
-                // 3. 设备回归且此前被暂停 → 重挂 A
-                if (route.AwaitingDevice)
+                if (!route.LoopbackActive)
                 {
-                    Log?.Invoke($"[看门狗] 目标设备「{route.Command.TargetDevice.FriendlyName}」回归 → 重挂 A 路由（进程 {pid}）");
-                    var r = _loopback.ApplyAsync(route.Command).AsTask().GetAwaiter().GetResult();
-                    MarkLoopback(pid, active: r.Success, awaitingDevice: !r.Success);
-                    if (!r.Success)
-                    {
-                        Log?.Invoke($"[看门狗] 重挂失败: {r.Message}");
-                    }
+                    continue;
                 }
 
                 // 4. P2 音量守护：应用可能重建音频会话，周期性重设音量 / 静音

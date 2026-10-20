@@ -169,7 +169,28 @@ public sealed class AppHost : IDisposable
                         continue;
                     }
 
-                    var device = new AudioDeviceRef(route.DeviceName, route.DeviceId);
+                    // DeviceId 可能为空（ProfileService 对进程未运行的规则先写意图）：
+                    // 直接用会让 B2 把空串当作「清除覆盖」（反向操作）、A 按 ID 解析必失败。
+                    // 先按名称解析出真实设备再发命令（与 RouteRebuilder 统一路径）。
+                    string deviceId = route.DeviceId;
+                    string deviceName = route.DeviceName;
+                    if (string.IsNullOrWhiteSpace(deviceId))
+                    {
+                        try
+                        {
+                            var resolved = DeviceManager.ResolveDevice(deviceName);
+                            deviceId = resolved.Id;
+                            deviceName = resolved.FriendlyName;
+                        }
+                        catch (Exception ex)
+                        {
+                            Log?.Invoke($"[扫描] {Path.GetFileName(route.ProcessPath)} 目标设备「{deviceName}」解析失败，跳过：{ex.Message}");
+                            _store.Remove(route.ProcessPath);
+                            continue;
+                        }
+                    }
+
+                    var device = new AudioDeviceRef(deviceName, deviceId);
                     var command = new RoutingCommand(process.Id, route.ProcessPath, device, route.Volume, route.Mute);
                     var report = _coordinator.ApplyRouteAsync(command, route.Mode).GetAwaiter().GetResult();
                     Log?.Invoke($"[应用] {Path.GetFileName(route.ProcessPath)}（PID {process.Id}）→ {route.DeviceName}" +
