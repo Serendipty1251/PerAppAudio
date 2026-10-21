@@ -41,8 +41,12 @@ public static class SessionActions
             return new Result(L10n.Get("OsdNoOnlineDevice"), L10n.Get("OsdNoOnlineDevice"), false);
         }
 
-        string current = WasapiSessionSource.GetDeviceOfProcesses()
-            .TryGetValue(pid, out var cur) ? cur : string.Empty;
+        // H2：current 优先取活动路由的目标设备——A 路由不移动应用会话（只采集端抑制），
+        // 应用会话仍留在原设备；取会话所在设备会让热键循环永远停在「原设备→第一个目标」。
+        string? routedTarget = host.Coordinator.GetLiveRoutes()
+            .FirstOrDefault(l => l.ProcessId == pid && l.LoopbackActive).TargetDevice;
+        string current = routedTarget
+            ?? (WasapiSessionSource.GetDeviceOfProcesses().TryGetValue(pid, out var cur) ? cur : string.Empty);
         int idx = -1;
         for (int i = 0; i < online.Count; i++)
         {

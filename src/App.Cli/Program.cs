@@ -340,6 +340,14 @@ internal static class Program
                     {
                         Buffer.BlockCopy(BitConverter.GetBytes((short)v), 0, chunk, offset, 2);
                     }
+                    else if (bytesPerSample == 3)
+                    {
+                        // 24-bit PCM：3 字节槽位手写（旧代码走 (int) 4 字节拷贝会越界/错位）
+                        int sv = (int)v;
+                        chunk[offset] = (byte)sv;
+                        chunk[offset + 1] = (byte)(sv >> 8);
+                        chunk[offset + 2] = (byte)(sv >> 16);
+                    }
                     else
                     {
                         Buffer.BlockCopy(BitConverter.GetBytes((int)v), 0, chunk, offset, 4);
@@ -669,6 +677,17 @@ internal static class Program
                 bool replace = args.Contains("--replace", StringComparer.OrdinalIgnoreCase);
                 bool dryRun = args.Contains("--dry-run", StringComparer.OrdinalIgnoreCase);
 
+                if (!dryRun)
+                {
+                    // apply 会建 A 链路/写 B2，与常驻实例冲突（H4）
+                    var guard = AcquireSingleInstanceOrWarn();
+                    if (guard is null)
+                    {
+                        return 1;
+                    }
+                    guard.Dispose();   // apply 短命命令：写完即退出，不需持锁到命令结束
+                }
+
                 using var coordinator = new RoutingCoordinator();
                 var probes = coordinator.ProbeAsync().GetAwaiter().GetResult();
                 Console.WriteLine($"[探测] 手段A: {(probes.Loopback.Available ? "可用" : "不可用")} | 手段B2: {(probes.Endpoint.Available ? "可用" : "不可用")}");
@@ -735,6 +754,11 @@ internal static class Program
             case "rebuild":
             {
                 // 全量重建：先拆所有 A 链路再按路由表重建（睡眠唤醒后的手动恢复入口）
+                using var instanceGuard = AcquireSingleInstanceOrWarn();
+                if (instanceGuard is null)
+                {
+                    return 1;
+                }
                 using var coordinator = new RoutingCoordinator();
                 int n = RouteRebuilder.RebuildAllAsync(coordinator, store, m => Console.WriteLine(m))
                     .GetAwaiter().GetResult();
@@ -866,6 +890,13 @@ internal static class Program
     {
         int intervalMs = int.TryParse(GetOption(args, "--interval"), out int iv) ? Math.Clamp(iv, 500, 30_000) : 2000;
 
+        // 常驻命令必须持有单实例锁整个生命周期（H4：与 WPF 共用同一锁名互斥）
+        var guard = AcquireSingleInstanceOrWarn();
+        if (guard is null)
+        {
+            return 1;
+        }
+
         using var coordinator = new RoutingCoordinator();
         var (loopbackProbe, endpointProbe) = coordinator.ProbeAsync().GetAwaiter().GetResult();
         Console.WriteLine($"[探测] 手段A: {(loopbackProbe.Available ? "可用" : "不可用")} | 手段B2: {(endpointProbe.Available ? "可用" : "不可用")}");
@@ -974,6 +1005,27 @@ internal static class Program
         var devices = DeviceManager.EnumerateRenderDevices();
         var d = devices.FirstOrDefault(x => x.IsDefaultConsole) ?? devices[0];
         return d.Id;
+    }
+
+    /// <summary>
+    /// 单实例守卫：有 PerAppAudio 常驻实例（WPF / ctl watch）在跑时拒绝执行。
+    /// 两个进程对同一 PID 各建一套 loopback 捕获 + 渲染器 = 目标设备双重播放
+    /// （相位差回声）；且新协调器 _live 为空，「拆旧链」完全空转（H4 实测确认）。
+    /// 返回 null = 无冲突；否则返回已持有的 Mutex（调用方负责释放）。
+    /// </summary>
+    private static Mutex? AcquireSingleInstanceOrWarn()
+    {
+        var mutex = new Mutex(true, AppHost.SingleInstanceName, out bool createdNew);
+        if (createdNew)
+        {
+            return mutex;
+        }
+
+        mutex.Dispose();
+        Console.Error.WriteLine("已有 PerAppAudio 常驻实例在运行（托盘程序或 ctl watch）。");
+        Console.Error.WriteLine("本命令会与其冲突（双重播放 / 空拆链），已拒绝执行。");
+        Console.Error.WriteLine("请先退出常驻实例，或改用其自身界面/命令操作。");
+        return null;
     }
 
     private static string? GetOption(string[] args, string name)

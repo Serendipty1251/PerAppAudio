@@ -22,12 +22,23 @@ public sealed class LoopbackBackend : IRoutingBackend
         public required WasapiRenderer Renderer { get; init; }
         public required RedirectStats Stats { get; init; }
         public required int ProcessId { get; init; }
+        /// <summary>目标设备 ID（H2：复用判断必须比对目标，切设备才不会静默失效）。</summary>
+        public required string TargetDeviceId { get; init; }
     }
 
     private readonly Dictionary<int, ActiveRoute> _routes = new();
+    /// <summary>建链中的 PID 占位（M1：检查与插入分离会让 UI 点击与扫描循环并发重复建链，前者泄漏）。</summary>
+    private readonly HashSet<int> _pending = new();
     private readonly object _gate = new();
 
     public RoutingMode Mode => RoutingMode.Loopback;
+
+    /// <summary>
+    /// 采集线程异常死亡通知（M2：线程死后 _routes 条目仍在，看门狗「进程存活+设备存在」
+    /// 检查永不触发 → 路由静默失效。协调器订阅此事件把链路标记为待重挂，复用看门狗）。
+    /// 参数 = PID。
+    /// </summary>
+    public event Action<int>? CaptureDied;
 
     public ValueTask<BackendProbeResult> ProbeAsync(CancellationToken ct = default)
     {
@@ -45,9 +56,20 @@ public sealed class LoopbackBackend : IRoutingBackend
     {
         lock (_gate)
         {
-            if (_routes.ContainsKey(command.ProcessId))
+            if (_routes.TryGetValue(command.ProcessId, out var existing))
             {
-                return new RoutingResult(false, RoutingMode.Loopback, $"进程 {command.ProcessId} 已有活动路由");
+                // H2：目标设备相同才复用；不同必须先拆再建——否则 UI 切设备后
+                // B2 指向新设备而 A 链路仍渲染旧设备，听到的声音不动。
+                if (string.Equals(existing.TargetDeviceId, command.TargetDevice.DeviceId, StringComparison.OrdinalIgnoreCase))
+                {
+                    return new RoutingResult(false, RoutingMode.Loopback, $"进程 {command.ProcessId} 已有同目标路由");
+                }
+            }
+
+            // M1：建链中拒绝重入（检查与插入分离的并发窗口）
+            if (!_pending.Add(command.ProcessId))
+            {
+                return new RoutingResult(false, RoutingMode.Loopback, $"进程 {command.ProcessId} 正在建立路由（并发请求拒绝）");
             }
         }
 
@@ -74,7 +96,11 @@ public sealed class LoopbackBackend : IRoutingBackend
                 formatSize,
                 bufferMilliseconds: 10,
                 onPacket: (data, frames, flags) => OnPacket(command.ProcessId, data, frames, flags, stats),
-                onError: ex => Console.Error.WriteLine($"[LoopbackBackend] 采集错误: {ex.Message}"),
+                onError: ex =>
+                {
+                    Console.Error.WriteLine($"[LoopbackBackend] 采集线程死亡（PID {command.ProcessId}）: {ex.Message}");
+                    try { CaptureDied?.Invoke(command.ProcessId); } catch { }
+                },
                 ct: ct).ConfigureAwait(false);
 
             // 3. 启动目标设备渲染
@@ -87,6 +113,7 @@ public sealed class LoopbackBackend : IRoutingBackend
                 Renderer = renderer,
                 Stats = stats,
                 ProcessId = command.ProcessId,
+                TargetDeviceId = command.TargetDevice.DeviceId,
             };
 
             lock (_gate)
@@ -129,6 +156,12 @@ public sealed class LoopbackBackend : IRoutingBackend
             if (mixFormatPtr != IntPtr.Zero)
             {
                 Marshal.FreeCoTaskMem(mixFormatPtr);
+            }
+
+            // M1：无论成败都释放占位（失败时下次可重试）
+            lock (_gate)
+            {
+                _pending.Remove(command.ProcessId);
             }
         }
     }

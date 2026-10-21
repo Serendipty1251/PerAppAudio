@@ -140,9 +140,12 @@ public sealed class RuleSet
         DeviceEventRule? currentEvent = null;
         string section = string.Empty; // "" | "profiles" | "device_events" | "devices"
 
-        foreach (var rawLine in lines)
+        // 索引循环而非 foreach + Array.IndexOf：对重复行（两个 mute: false 等 YAML 常见形态）
+        // IndexOf 恒返回首个匹配下标，格式报错会把用户指向错误行（M6）。
+        for (int lineIdx = 0; lineIdx < lines.Length; lineIdx++)
         {
-            int lineNo = Array.IndexOf(lines, rawLine) + 1;
+            var rawLine = lines[lineIdx];
+            int lineNo = lineIdx + 1;
             string line = StripComment(rawLine).TrimEnd();
             if (line.Trim().Length == 0) continue;
 

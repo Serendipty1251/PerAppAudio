@@ -142,11 +142,14 @@ public sealed class ProfileService
                     ? plan.Matches[0].Path
                     : (Path.IsPathRooted(plan.Rule.Process) ? plan.Rule.Process : Path.GetFileName(plan.Rule.Process));
 
+                // 存解析后的引用（plan.DeviceRef 已经别名表解析）而非规则原文：
+                // 原文可能是别名（如 speaker），扫描循环的 ResolveDevice 不认识别名表，
+                // 解析必失败会把路由删掉（H1：数据丢失）。
                 _store.Upsert(new StoredRoute
                 {
                     ProcessPath = storeKey,
-                    DeviceId = string.Empty,   // 设备解析放后面（避免为未命中的规则白解析）
-                    DeviceName = plan.Rule.Device,
+                    DeviceId = string.Empty,
+                    DeviceName = plan.DeviceRef,
                     Mode = ParseMode(plan.Rule.Mode, _rules.DefaultMode),
                     Volume = plan.Rule.Volume,
                     Mute = plan.Rule.Mute,

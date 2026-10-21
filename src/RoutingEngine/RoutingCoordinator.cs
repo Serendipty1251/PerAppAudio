@@ -45,8 +45,16 @@ public sealed class RoutingCoordinator : IDisposable
         public bool AwaitingDevice { get; set; }
     }
 
-    private readonly LoopbackBackend _loopback = new();
+    private readonly LoopbackBackend _loopback;
     private readonly EndpointBackend _endpoint = new();
+
+    public RoutingCoordinator()
+    {
+        // M2：采集线程死亡 → MarkLoopback(awaitingDevice)，看门狗 ≤2s 自动重挂
+        // （睡眠重建只覆盖电源事件，不覆盖一般性采集崩溃）
+        _loopback = new LoopbackBackend();
+        _loopback.CaptureDied += OnCaptureDied;
+    }
     private readonly Dictionary<int, LiveRoute> _live = new();
     private readonly object _gate = new();
     private Timer? _watchdog;
@@ -58,6 +66,14 @@ public sealed class RoutingCoordinator : IDisposable
 
     /// <summary>看门狗与重挂事件日志（CLI/UI 订阅）。</summary>
     public event Action<string>? Log;
+
+    // M2：采集线程死亡 → 标记该链路 AwaitingDevice，看门狗下一轮（≤2s）自动重挂
+    // （睡眠重建只覆盖电源事件，不覆盖一般性采集崩溃）。
+    private void OnCaptureDied(int pid)
+    {
+        Log?.Invoke($"[看门狗] 采集线程死亡（PID {pid}）→ 标记待重挂");
+        MarkLoopback(pid, active: false, awaitingDevice: true);
+    }
 
     /// <summary>探测两个手段的可用性（启动时调用一次，结果决定 Auto 的分派范围）。</summary>
     public async Task<(BackendProbeResult Loopback, BackendProbeResult Endpoint)> ProbeAsync(CancellationToken ct = default)
@@ -100,21 +116,44 @@ public sealed class RoutingCoordinator : IDisposable
             {
                 loopbackMessage = $"手段A 跳过（探测不可用：{_loopbackProbe.Reason}）";
             }
-            else if (_loopback.IsRouting(command.ProcessId))
-            {
-                loopbackActive = true;
-                // 复用不等于不更新：A 路径的听感音量 = 我们的渲染会话音量，
-                // 路由创建后 UI 改音量靠这里下发（应用自身会话已被静音，走 ApplySessionControl 无效）。
-                float? readBack = _loopback.UpdateVolume(command.ProcessId, command.Volume);
-                loopbackMessage = readBack.HasValue
-                    ? $"已有活动 A 路由，已同步渲染会话音量→ {readBack.Value:F2}"
-                    : "已有活动 A 路由（音量同步失败）";
-            }
             else
             {
-                var r = await _loopback.ApplyAsync(command, ct).ConfigureAwait(false);
-                loopbackActive = r.Success;
-                loopbackMessage = r.Message;
+                // 无现有链路：判断是否已有同目标路由（IsRouting 内部已含目标比对）
+                if (_loopback.IsRouting(command.ProcessId))
+                {
+                    // H2：同 PID 已有 A 链路时先判目标——相同复用（仅同步音量）；
+                    // 不同必须先拆再建，否则 UI 切设备后 B2 指新设备、A 仍渲染旧设备（声音不动）。
+                    bool sameTarget = GetLiveRoutes()
+                        .Where(l => l.ProcessId == command.ProcessId)
+                        .Select(l => l.TargetDeviceId)
+                        .DefaultIfEmpty(string.Empty)
+                        .FirstOrDefault() is { } liveDev
+                        && string.Equals(liveDev, command.TargetDevice.DeviceId, StringComparison.OrdinalIgnoreCase);
+
+                    if (sameTarget)
+                    {
+                        loopbackActive = true;
+                        float? readBack = _loopback.UpdateVolume(command.ProcessId, command.Volume);
+                        loopbackMessage = readBack.HasValue
+                            ? $"已有同目标 A 路由，已同步渲染会话音量→ {readBack.Value:F2}"
+                            : "已有同目标 A 路由（音量同步失败）";
+                    }
+                    else
+                    {
+                        // 目标变化：拆旧链后重建
+                        await _loopback.RemoveAsync(new RoutingCommand(command.ProcessId, command.ProcessPath,
+                            new AudioDeviceRef(string.Empty, string.Empty), 1f, false), ct).ConfigureAwait(false);
+                        var r2 = await _loopback.ApplyAsync(command, ct).ConfigureAwait(false);
+                        loopbackActive = r2.Success;
+                        loopbackMessage = $"目标变化 → 重建：{r2.Message}";
+                    }
+                }
+                else
+                {
+                    var r = await _loopback.ApplyAsync(command, ct).ConfigureAwait(false);
+                    loopbackActive = r.Success;
+                    loopbackMessage = r.Message;
+                }
             }
         }
 
@@ -247,14 +286,15 @@ public sealed class RoutingCoordinator : IDisposable
         _watchdog ??= new Timer(_ => WatchdogTick(), null, intervalMs, intervalMs);
     }
 
-    /// <summary>当前活动路由快照（CLI/UI 展示用）。</summary>
-    public IReadOnlyList<(int ProcessId, string ProcessPath, string TargetDevice, RoutingMode Mode, bool LoopbackActive, bool EndpointApplied, bool AwaitingDevice, DateTime AppliedAt)>
+    /// <summary>当前活动路由快照（CLI/UI 展示用；TargetDeviceId 供目标比对——H2 切换设备判定）。</summary>
+    public IReadOnlyList<(int ProcessId, string ProcessPath, string TargetDevice, string TargetDeviceId, RoutingMode Mode, bool LoopbackActive, bool EndpointApplied, bool AwaitingDevice, DateTime AppliedAt)>
         GetLiveRoutes()
     {
         lock (_gate)
         {
             return _live.Values
                 .Select(r => (r.Command.ProcessId, r.Command.ProcessPath, r.Command.TargetDevice.FriendlyName,
+                    r.Command.TargetDevice.DeviceId,
                     r.RequestedMode, r.LoopbackActive, r.EndpointApplied, r.AwaitingDevice, r.AppliedAt))
                 .ToList();
         }

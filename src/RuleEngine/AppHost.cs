@@ -233,8 +233,9 @@ public sealed class AppHost : IDisposable
                         }
                         catch (Exception ex)
                         {
-                            Log?.Invoke($"[扫描] {Path.GetFileName(route.ProcessPath)} 目标设备「{deviceName}」解析失败，跳过：{ex.Message}");
-                            _store.Remove(route.ProcessPath);
+                            // 只跳过不删除：设备可能只是暂时拔出（蓝牙/摩尔设备）。删持久配置会让
+                            // 用户的路由意图随一次设备拔出永久消失（H1 实测确认）。
+                            Log?.Invoke($"[扫描] {Path.GetFileName(route.ProcessPath)} 目标设备「{deviceName}」解析失败，跳过（保留路由）：{ex.Message}");
                             continue;
                         }
                     }
@@ -250,6 +251,27 @@ public sealed class AppHost : IDisposable
                         Log?.Invoke($"    B2: {report.EndpointMessage}");
                         Log?.Invoke($"    A : {report.LoopbackMessage}");
                     }
+                }
+            }
+        }
+
+        // H3 对账：_live 中路径不再命中路由表任一条 → 主动拆除。
+        // 否则常驻实例对「外部删除的路甴（ctl remove / 手编 routes.json）」永不感知，
+        // 幽灵 A 链路持续改道到目标进程退出为止。
+        var storeNames = new HashSet<string>(
+            _store.Routes.Select(r => Path.GetFileName(r.ProcessPath)), StringComparer.OrdinalIgnoreCase);
+        foreach (var l in _coordinator.GetLiveRoutes())
+        {
+            if (!storeNames.Contains(Path.GetFileName(l.ProcessPath)))
+            {
+                try
+                {
+                    _coordinator.RemoveRouteAsync(l.ProcessId, clearEndpoint: true).GetAwaiter().GetResult();
+                    Log?.Invoke($"[对账] {Path.GetFileName(l.ProcessPath)}（PID {l.ProcessId}）已不在路由表 → 拆除残留链路");
+                }
+                catch (Exception ex)
+                {
+                    Log?.Invoke($"[对账] 拆除 PID {l.ProcessId} 失败: {ex.Message}");
                 }
             }
         }
