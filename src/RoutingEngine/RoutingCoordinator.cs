@@ -67,11 +67,24 @@ public sealed class RoutingCoordinator : IDisposable
     /// <summary>看门狗与重挂事件日志（CLI/UI 订阅）。</summary>
     public event Action<string>? Log;
 
-    // M2：采集线程死亡 → 标记该链路 AwaitingDevice，看门狗下一轮（≤2s）自动重挂
-    // （睡眠重建只覆盖电源事件，不覆盖一般性采集崩溃）。
+    // M2：采集线程死亡 → 拆除死链路 + 标记待重挂，看门狗下一轮（≤2s）自动重建。
+    // 必须先拆条目（与设备拔出分支对齐）：只标记不拆的话，死 ActiveRoute 仍在 _routes 里，
+    // 重挂时 H2 去重会命中「已有同目标路由」拒绝→无限失败循环（M2-修复引入的新缺陷）。
+    // 线程安全：本方法在采集线程上下文调用；采集线程已死、Capture.Dispose 的 Join 立即返回，
+    // RemoveAsync 内部锁与锁外释放均不会长阻塞。
     private void OnCaptureDied(int pid)
     {
-        Log?.Invoke($"[看门狗] 采集线程死亡（PID {pid}）→ 标记待重挂");
+        Log?.Invoke($"[看门狗] 采集线程死亡（PID {pid}）→ 拆除死链路并标记待重挂");
+        try
+        {
+            _loopback.RemoveAsync(new RoutingCommand(pid, string.Empty,
+                new AudioDeviceRef(string.Empty, string.Empty), 1f, false)).AsTask().Wait(TimeSpan.FromSeconds(3));
+        }
+        catch (Exception ex)
+        {
+            Log?.Invoke($"[看门狗] 拆除死链路失败（PID {pid}）: {ex.Message}");
+        }
+
         MarkLoopback(pid, active: false, awaitingDevice: true);
     }
 

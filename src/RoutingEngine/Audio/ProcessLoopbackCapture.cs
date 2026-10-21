@@ -156,7 +156,14 @@ public sealed class ProcessLoopbackCapture : IDisposable
         {
             _cts.Cancel();
             _packetEvent.Set();
-            if (_thread is { IsAlive: true }) _thread.Join(2000);
+            // 不得 Join 调用方线程自身：CaptureDied 异常路径里 Dispose 由采集线程
+            // 自身调用（OnCaptureDied → RemoveAsync → Dispose），Join(self) 会死等
+            // 2000ms 白白超时（线程 Join 自己永远不返回）。该场景线程即将退出，
+            // 无需等待。
+            if (_thread is { IsAlive: true } && !ReferenceEquals(_thread, Thread.CurrentThread))
+            {
+                _thread.Join(2000);
+            }
         }
         catch
         {
