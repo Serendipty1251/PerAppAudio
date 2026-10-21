@@ -166,10 +166,12 @@ public partial class MainWindow : Window
             Devices.Add(add);
         }
 
+        // 只打友好名（打印整个 record 会刷屏且不可读）
+        string offlineNames = string.Join("、", offlineTargets.Select(d => d.FriendlyName));
         AppendLog($"[设备] 在线 {_onlineDevices.Count} 个；路由目标离线 {offlineTargets.Count} 个" +
-            (offlineTargets.Count > 0 ? $"（{string.Join("、", offlineTargets)}）" : ""));
+            (offlineTargets.Count > 0 ? $"（{offlineNames}）" : ""));
         App.AppendFileLog($"[设备] 在线 {_onlineDevices.Count} 个；路由目标离线 {offlineTargets.Count} 个" +
-            (offlineTargets.Count > 0 ? $"（{string.Join("、", offlineTargets)}）" : ""));
+            (offlineTargets.Count > 0 ? $"（{offlineNames}）" : ""));
 
         // 在线列表变化后选中项可能失效：正在播放行回退到默认在线设备，避免 null 进入路由
         var fallback = online.FirstOrDefault(d => d.IsDefaultConsole)?.FriendlyName
